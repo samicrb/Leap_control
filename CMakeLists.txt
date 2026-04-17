@@ -1,0 +1,103 @@
+cmake_minimum_required(VERSION 3.16)
+project(doosan_gesture_demo CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(MSVC)
+    add_compile_options(/W4 /permissive- /Zc:__cplusplus)
+else()
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# ---------------------------------------------------------------------------
+# Optional external SDKs.
+#
+# The project is structured so that LeapC and DRFL are cleanly wrapped by
+# adapter classes. When the SDKs are not installed on the build machine the
+# project still builds with stub adapters, so the state machine / gesture
+# logic can be exercised on a developer laptop.
+#
+# To enable real SDK integration set:
+#   -DLEAPC_SDK_ROOT="C:/Program Files/Ultraleap/LeapSDK"
+#   -DDRFL_SDK_ROOT="C:/Doosan/DRFL"
+# ---------------------------------------------------------------------------
+set(LEAPC_SDK_ROOT "" CACHE PATH "Path to Ultraleap Gemini LeapSDK (contains include/LeapC.h)")
+set(DRFL_SDK_ROOT  "" CACHE PATH "Path to Doosan DRFL 1.33.2 SDK (contains include/DRFLEx.h)")
+
+set(HAVE_LEAPC FALSE)
+if(LEAPC_SDK_ROOT AND EXISTS "${LEAPC_SDK_ROOT}/include/LeapC.h")
+    set(HAVE_LEAPC TRUE)
+    message(STATUS "LeapC SDK found at ${LEAPC_SDK_ROOT}")
+else()
+    message(WARNING "LeapC SDK not found - building with STUB sensor adapter")
+endif()
+
+set(HAVE_DRFL FALSE)
+if(DRFL_SDK_ROOT AND EXISTS "${DRFL_SDK_ROOT}/include/DRFLEx.h")
+    set(HAVE_DRFL TRUE)
+    message(STATUS "DRFL SDK found at ${DRFL_SDK_ROOT}")
+else()
+    message(WARNING "DRFL SDK not found - building with STUB robot adapter")
+endif()
+
+# ---------------------------------------------------------------------------
+# Source files
+# ---------------------------------------------------------------------------
+set(APP_SOURCES
+    src/main.cpp
+    src/app/Application.cpp
+    src/config/Config.cpp
+    src/sensor/LeapSource.cpp
+    src/gesture/GestureInterpreter.cpp
+    src/state/StateMachine.cpp
+    src/robot/DrflRobotController.cpp
+    src/robot/WorkspaceGuard.cpp
+    src/gripper/SchunkGripperController.cpp
+    src/input/KeyboardButton.cpp
+    src/ui/ConsoleUI.cpp
+    src/util/Logger.cpp
+)
+
+add_executable(doosan_gesture_demo ${APP_SOURCES})
+target_include_directories(doosan_gesture_demo PRIVATE src)
+
+if(HAVE_LEAPC)
+    target_compile_definitions(doosan_gesture_demo PRIVATE HAVE_LEAPC=1)
+    target_include_directories(doosan_gesture_demo PRIVATE "${LEAPC_SDK_ROOT}/include")
+    target_link_directories(doosan_gesture_demo PRIVATE "${LEAPC_SDK_ROOT}/lib/x64")
+    target_link_libraries(doosan_gesture_demo PRIVATE LeapC)
+endif()
+
+if(HAVE_DRFL)
+    target_compile_definitions(doosan_gesture_demo PRIVATE HAVE_DRFL=1)
+    target_include_directories(doosan_gesture_demo PRIVATE "${DRFL_SDK_ROOT}/include")
+    target_link_directories(doosan_gesture_demo PRIVATE "${DRFL_SDK_ROOT}/lib")
+    # DRFL ships as DRFL.lib or DRFLx.lib on Windows. Adjust if needed at the venue.
+    target_link_libraries(doosan_gesture_demo PRIVATE DRFL)
+endif()
+
+if(WIN32)
+    target_link_libraries(doosan_gesture_demo PRIVATE ws2_32)
+endif()
+
+# ---------------------------------------------------------------------------
+# Tests (headless - state machine / gesture interpreter only)
+# ---------------------------------------------------------------------------
+add_executable(state_machine_smoke_test
+    test/state_machine_smoke_test.cpp
+    src/state/StateMachine.cpp
+    src/config/Config.cpp
+    src/util/Logger.cpp
+)
+target_include_directories(state_machine_smoke_test PRIVATE src)
+enable_testing()
+add_test(NAME state_machine_smoke COMMAND state_machine_smoke_test)
+
+# Copy config next to binary so the demo can be launched directly.
+add_custom_command(TARGET doosan_gesture_demo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/config/demo_config.ini"
+            "$<TARGET_FILE_DIR:doosan_gesture_demo>/demo_config.ini"
+)
