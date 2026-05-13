@@ -2,7 +2,7 @@
 
 #include "app/Application.hpp"
 #include "config/Config.hpp"
-#include "gripper/SchunkGripperController.hpp"
+#include "gripper/ToolIoGripperController.hpp"
 #include "input/KeyboardButton.hpp"
 #include "robot/DrflRobotController.hpp"
 #include "sensor/LeapSource.hpp"
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
 
     dgd::LeapSource            sensor;
     dgd::DrflRobotController   robot(cfg);
-    dgd::SchunkGripperController gripper(cfg, robot);
+    dgd::ToolIoGripperController gripper(cfg, robot);
     dgd::KeyboardButton        button;
 
     dgd::Application app(cfg, sensor, robot, gripper, button);

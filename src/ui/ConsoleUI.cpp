@@ -35,7 +35,7 @@ void ConsoleUI::render(const Frame& f) {
     }
 
     std::printf("==============================================================\n");
-    std::printf(" DOOSAN A0912 - Leap Motion gesture demo\n");
+    std::printf(" DOOSAN A0509 - Leap Motion gesture demo\n");
     std::printf("==============================================================\n");
     std::printf(" STATE   : %-12s    BUTTON: %s\n",
                 stateName(f.state),

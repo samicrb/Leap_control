@@ -80,7 +80,14 @@ gripper.neutral_max_mm     = 140.0
 gripper.facing_dot_max     = -0.5
 gripper.cooldown_s         = 0.8
 gripper.gesture_hold_s     = 0.25
+gripper.open_do_index      = 2     # tool DO channel for OPEN coil
+gripper.close_do_index     = 1     # tool DO channel for CLOSE coil
 ```
+
+The gripper module (`ToolIoGripperController`) is end-effector agnostic:
+any pneumatic / electric gripper exposing a pair of OPEN/CLOSE coils on
+the tool flange works (Schunk, Robotiq, OnRobot, custom). Match the DO
+indices to the cell wiring.
 
 Rules of thumb:
 - The **neutral band** must contain reasonable resting distances and not
@@ -94,14 +101,20 @@ Rules of thumb:
 ### 2.6 Workspace envelope
 
 ```
+workspace.enabled            (bool - master switch)
 workspace.x_min / x_max      (mm, robot base X)
 workspace.y_min / y_max      (mm, robot base Y)
 workspace.z_min / z_max      (mm, robot base Z)
 workspace.rx_range / ry_range / rz_range   (deg, +/- from safe pose)
 ```
 
-Start small. Walk the cell. Gradually widen X/Y/Z until the motion is
-visually rich but the arm cannot reach anything fragile.
+Shipped default is `workspace.enabled = false` so first-time bring-up runs
+with only the speed/accel caps. Once the cell is characterised:
+
+1. Set `workspace.enabled = true`.
+2. Start with a small cube around the safe pose. Walk the cell.
+3. Gradually widen X/Y/Z until the motion is visually rich but the arm
+   cannot reach anything fragile.
 
 ### 2.7 Speed / acceleration caps
 

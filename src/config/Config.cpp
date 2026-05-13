@@ -79,6 +79,7 @@ bool loadConfig(const std::string& path, Config& c) {
     c.max_lin_accel  = dGet("robot.max_lin_accel", c.max_lin_accel);
     c.max_ang_accel  = dGet("robot.max_ang_accel", c.max_ang_accel);
 
+    c.ws_enabled = bGet("workspace.enabled", c.ws_enabled);
     c.ws_x_min = dGet("workspace.x_min", c.ws_x_min);
     c.ws_x_max = dGet("workspace.x_max", c.ws_x_max);
     c.ws_y_min = dGet("workspace.y_min", c.ws_y_min);
@@ -121,6 +122,8 @@ bool loadConfig(const std::string& path, Config& c) {
     c.gripper_facing_dot_max = dGet("gripper.facing_dot_max", c.gripper_facing_dot_max);
     c.gripper_cooldown_s     = dGet("gripper.cooldown_s",     c.gripper_cooldown_s);
     c.gripper_gesture_hold_s = dGet("gripper.gesture_hold_s", c.gripper_gesture_hold_s);
+    c.gripper_open_do_index  = iGet("gripper.open_do_index",  c.gripper_open_do_index);
+    c.gripper_close_do_index = iGet("gripper.close_do_index", c.gripper_close_do_index);
 
     c.button_mode = sGet("button.mode", c.button_mode);
     c.button_key  = sGet("button.keyboard_key", c.button_key);
