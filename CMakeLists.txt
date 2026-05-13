@@ -73,9 +73,50 @@ endif()
 if(HAVE_DRFL)
     target_compile_definitions(doosan_gesture_demo PRIVATE HAVE_DRFL=1)
     target_include_directories(doosan_gesture_demo PRIVATE "${DRFL_SDK_ROOT}/include")
-    target_link_directories(doosan_gesture_demo PRIVATE "${DRFL_SDK_ROOT}/lib")
-    # DRFL ships as DRFL.lib or DRFLx.lib on Windows. Adjust if needed at the venue.
-    target_link_libraries(doosan_gesture_demo PRIVATE DRFL)
+
+    # Resolve the DRFL import library. The 1.33.3 release at
+    # github.com/DoosanRobotics/API-DRFL ships "DRFLWin64.lib" under
+    # library/Windows/64bits/; older bundles use lib/x64/DRFL.lib or
+    # DRFLx64.lib. Search all known layouts so the build works regardless
+    # of how the SDK was unpacked.
+    find_library(DRFL_LIBRARY
+        NAMES DRFLWin64 DRFLx64 DRFL64 DRFL
+        PATHS
+            "${DRFL_SDK_ROOT}/library/Windows/64bits"
+            "${DRFL_SDK_ROOT}/library/Windows/32bits"
+            "${DRFL_SDK_ROOT}/lib/x64"
+            "${DRFL_SDK_ROOT}/lib"
+        NO_DEFAULT_PATH
+    )
+    if(NOT DRFL_LIBRARY)
+        message(FATAL_ERROR
+            "DRFL library not found under ${DRFL_SDK_ROOT}. "
+            "Expected DRFLWin64.lib (1.33.3) or DRFL.lib (older).")
+    endif()
+    message(STATUS "DRFL library: ${DRFL_LIBRARY}")
+    target_link_libraries(doosan_gesture_demo PRIVATE "${DRFL_LIBRARY}")
+
+    # Copy the runtime DLLs next to the binary so the demo launches
+    # without manual PATH gymnastics. Both 1.33.3's flat layout and the
+    # older lib/x64 layout are handled.
+    if(WIN32)
+        set(_drfl_dll_candidates
+            "${DRFL_SDK_ROOT}/library/Windows/64bits/DRFLWin64.dll"
+            "${DRFL_SDK_ROOT}/library/Windows/64bits/PocoFoundation64.dll"
+            "${DRFL_SDK_ROOT}/library/Windows/64bits/PocoNet64.dll"
+            "${DRFL_SDK_ROOT}/bin/DRFL.dll"
+            "${DRFL_SDK_ROOT}/lib/x64/DRFL.dll"
+        )
+        foreach(_dll IN LISTS _drfl_dll_candidates)
+            if(EXISTS "${_dll}")
+                add_custom_command(TARGET doosan_gesture_demo POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            "${_dll}"
+                            "$<TARGET_FILE_DIR:doosan_gesture_demo>"
+                )
+            endif()
+        endforeach()
+    endif()
 endif()
 
 if(WIN32)
