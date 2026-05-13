@@ -205,13 +205,13 @@ void DrflRobotController::disengage() {
     if (!engaged_.load()) return;
     stopMotion();
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    // Release control authority politely. close_connection() (called from
-    // disconnect()) returns the controller to a safe state for the teach
-    // pendant.
-    p_->drfl.manage_access_control(MANAGE_ACCESS_CONTROL_RELEASE);
+    // Note: DRFL 1.33.x does not consistently expose a RELEASE enumerant
+    // on MANAGE_ACCESS_CONTROL. close_connection() (invoked from
+    // disconnect()) already frees the authority when the socket drops, so
+    // an explicit release call is not required for a clean shutdown.
 #endif
     engaged_.store(false);
-    LOG_I("Robot disengaged (motion stopped, authority released).");
+    LOG_I("Robot disengaged (motion stopped, authority will release on disconnect).");
 }
 
 bool DrflRobotController::moveHome(const RobotPose& safe) {

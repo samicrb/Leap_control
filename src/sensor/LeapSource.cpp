@@ -22,7 +22,15 @@
 
 #if defined(HAVE_LEAPC) && HAVE_LEAPC
   // The real LeapC header is only included in this translation unit.
+  // Gemini 6.2.0's LeapC.h uses nameless struct/unions (C4201) on MSVC /W4.
+  #ifdef _MSC_VER
+    #pragma warning(push)
+    #pragma warning(disable: 4201)
+  #endif
   #include <LeapC.h>
+  #ifdef _MSC_VER
+    #pragma warning(pop)
+  #endif
 #endif
 
 namespace dgd {
