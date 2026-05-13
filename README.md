@@ -63,7 +63,9 @@ Leap_control/
 Prerequisites:
 - Visual Studio 2022 + CMake
 - Ultraleap Gemini 6.2.0 installed (`LeapC.h`, `LeapC.lib`)
-- Doosan DRFL 1.33.2 SDK unpacked (`DRFLEx.h`, `DRFL.lib`)
+- Doosan DRFL 1.33.x SDK from
+  [github.com/DoosanRobotics/API-DRFL](https://github.com/DoosanRobotics/API-DRFL)
+  (provides `include/DRFLEx.h` and `library/Windows/64bits/DRFLWin64.lib`)
 
 ```powershell
 git clone <this repo>
@@ -74,8 +76,16 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
 cmake --build build --config Release
 ```
 
+`DRFL_SDK_ROOT` should point at the root of the
+[API-DRFL](https://github.com/DoosanRobotics/API-DRFL) checkout — CMake
+expects to find `include/DRFLEx.h` and
+`library/Windows/64bits/DRFLWin64.lib` underneath it (older 1.33.2
+bundles using `lib/x64/DRFL.lib` are also accepted).
+
 The binary ends up at `build/Release/doosan_gesture_demo.exe`. The CMake
-post-build step copies `config/demo_config.ini` next to it.
+post-build step copies `config/demo_config.ini` and the DRFL runtime
+DLLs (`DRFLWin64.dll`, `PocoFoundation64.dll`, `PocoNet64.dll`) next to
+the binary so it can launch without manual PATH gymnastics.
 
 To build **without** the SDKs (dev laptop / CI), just omit the two
 `-D...SDK_ROOT` flags. The build falls back to cooperative stubs:
