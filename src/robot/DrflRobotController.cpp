@@ -11,7 +11,8 @@
 //   6. if state == STATE_SAFE_OFF: set_robot_control(CONTROL_SERVO_ON)
 //   7. wait for state == STATE_STANDBY
 //   8. set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-//   9. movel / speedl / stop
+//   9. set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE)
+//  10. movel / speedl / stop
 //
 // DRFL exposes plain-C callback function pointers (no userdata channel).
 // We therefore stash the bits of state callbacks need in file-scope atomics.
@@ -195,9 +196,19 @@ bool DrflRobotController::engage() {
 
     // 6. Autonomous mode (no teach-pendant gating of subsequent motions).
     p_->drfl.set_robot_mode(ROBOT_MODE_AUTONOMOUS);
+
+    // 7. Force the safety mode into AUTONOMOUS. Some controllers boot in
+    //    SAFETY_MODE_MANUAL (collaborative speed-limited) and trip a
+    //    SAFE_STOP as soon as a movel exceeds the manual-mode speed cap.
+    //    Pinning SAFETY_MODE_AUTONOMOUS here removes that footgun.
+    if (!p_->drfl.set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE)) {
+        last_error_ = "set_safety_mode(AUTONOMOUS, MOVE) failed";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
 #endif
     engaged_.store(true);
-    LOG_I("Robot engaged (authority + servo ON + STANDBY).");
+    LOG_I("Robot engaged (authority + servo ON + STANDBY + safety=AUTONOMOUS).");
     return true;
 }
 
