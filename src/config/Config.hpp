@@ -38,6 +38,15 @@ struct Config {
     // ignores Cartesian path singularities so it's the robust choice for
     // the initial home approach.
     bool        home_use_movejx = true;
+    // If true, engage() auto-fires CONTROL_RESET_SAFET_STOP /
+    // CONTROL_RESET_SAFET_OFF whenever the robot is found latched in one
+    // of those states at startup. A SAFE_STOP from a previous run
+    // remains latched on the controller and looks identical to a
+    // "mastering lost" condition - servo_on refuses to re-engage.
+    // DRFL CANNOT bypass an actual mastering loss (firmware-level safety
+    // check); if state stays in RECOVERY after the reset attempts, the
+    // pendant menu Setting -> Robot -> Mastering is the only recovery.
+    bool        auto_reset_safety = true;
 
     // --- loop ---
     int    loop_rate_hz    = 60;

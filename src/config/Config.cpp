@@ -76,6 +76,7 @@ bool loadConfig(const std::string& path, Config& c) {
     c.collision_sensitivity = iGet("robot.collision_sensitivity", c.collision_sensitivity);
     c.singularity_handling  = iGet("robot.singularity_handling",  c.singularity_handling);
     c.home_use_movejx       = bGet("robot.home_use_movejx",       c.home_use_movejx);
+    c.auto_reset_safety     = bGet("robot.auto_reset_safety",     c.auto_reset_safety);
 
     c.loop_rate_hz   = iGet("loop.rate_hz", c.loop_rate_hz);
     c.max_lin_speed  = dGet("robot.max_lin_speed", c.max_lin_speed);

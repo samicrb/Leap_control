@@ -183,8 +183,40 @@ bool DrflRobotController::engage() {
     }
     LOG_I("DRFL access control GRANTED.");
 
-    // 4. If the robot is in SAFE_OFF (servo off), turn the servos on.
-    if (g_robot_state.load() == static_cast<int>(STATE_SAFE_OFF)) {
+    // 4. Auto-clear latched safety stops left over from a previous run.
+    //    A SAFE_STOP / SAFE_OFF from a prior session stays latched on
+    //    the controller and looks identical to a "mastering lost" state:
+    //    servo_on below would silently refuse without this.
+    //    The reset calls are no-ops when no stop is latched.
+    if (cfg_.auto_reset_safety) {
+        const int s0 = g_robot_state.load();
+        if (s0 == static_cast<int>(STATE_SAFE_STOP) ||
+            s0 == static_cast<int>(STATE_SAFE_STOP2)) {
+            LOG_W("Robot latched in SAFE_STOP at startup; auto-resetting.");
+            p_->drfl.set_robot_control(CONTROL_RESET_SAFET_STOP);
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+        if (s0 == static_cast<int>(STATE_SAFE_OFF) ||
+            s0 == static_cast<int>(STATE_SAFE_OFF2)) {
+            LOG_W("Robot latched in SAFE_OFF at startup; auto-resetting.");
+            p_->drfl.set_robot_control(CONTROL_RESET_SAFET_OFF);
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+        if (s0 == static_cast<int>(STATE_RECOVERY)) {
+            // Real mastering loss / recovery-needed state: DRFL cannot
+            // bypass this. Log loudly and let the user fix it on the
+            // pendant. We continue and let the STANDBY wait time out so
+            // the operator sees the failure with full context.
+            LOG_E("Robot in RECOVERY state (likely mastering lost). "
+                  "Bypass via DRFL is NOT possible - restore from teach "
+                  "pendant: Setting -> Robot -> Mastering -> 'Use existing "
+                  "mastering data' or run Auto Mastering.");
+        }
+    }
+
+    // 5. If the robot is in SAFE_OFF (servo off), turn the servos on.
+    if (g_robot_state.load() == static_cast<int>(STATE_SAFE_OFF) ||
+        g_robot_state.load() == static_cast<int>(STATE_SAFE_OFF2)) {
         if (!p_->drfl.set_robot_control(CONTROL_SERVO_ON)) {
             last_error_ = "set_robot_control(SERVO_ON) failed";
             LOG_E("%s", last_error_.c_str());
