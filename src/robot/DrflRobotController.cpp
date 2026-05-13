@@ -11,7 +11,7 @@
 //   6. if state == STATE_SAFE_OFF: set_robot_control(CONTROL_SERVO_ON)
 //   7. wait for state == STATE_STANDBY
 //   8. set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-//   9. set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE)
+//   9. set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_STOP)
 //  10. movel / speedl / stop
 //
 // DRFL exposes plain-C callback function pointers (no userdata channel).
@@ -76,8 +76,14 @@ void onMonitoringAccessControl(const MONITORING_ACCESS_CONTROL eTrans) {
             break;
     }
 }
-void onLogAlarm(LPLOG_ALARM /*pLogAlarm*/) {
+void onLogAlarm(LPLOG_ALARM pLogAlarm) {
     g_alarm_seen.store(true);
+    if (!pLogAlarm) return;
+    // Surface the canonical Doosan alarm tuple. Cross-reference index in
+    // the Doosan alarm manual to identify the trip cause.
+    LOG_E("DRFL alarm: level=%d group=%d index=%d params=[%s | %s | %s]",
+          pLogAlarm->_iLevel, pLogAlarm->_iGroup, pLogAlarm->_iIndex,
+          pLogAlarm->_szParam[0], pLogAlarm->_szParam[1], pLogAlarm->_szParam[2]);
 }
 
 // Block until the predicate becomes true or `timeout_s` elapses.
@@ -201,8 +207,8 @@ bool DrflRobotController::engage() {
     //    SAFETY_MODE_MANUAL (collaborative speed-limited) and trip a
     //    SAFE_STOP as soon as a movel exceeds the manual-mode speed cap.
     //    Pinning SAFETY_MODE_AUTONOMOUS here removes that footgun.
-    if (!p_->drfl.set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE)) {
-        last_error_ = "set_safety_mode(AUTONOMOUS, MOVE) failed";
+    if (!p_->drfl.set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_STOP)) {
+        last_error_ = "set_safety_mode(AUTONOMOUS, STOP) failed";
         LOG_E("%s", last_error_.c_str());
         return false;
     }
