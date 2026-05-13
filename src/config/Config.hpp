@@ -14,6 +14,11 @@ struct Config {
     int         robot_port     = 12345;
     std::string robot_model    = "A0509";
     double      connect_timeout_s = 5.0;
+    // Skip the blocking movel-to-safe-pose at startup. Useful when the
+    // safe pose triggers a SAFE_STOP from a controller-side safety zone /
+    // collision check: the demo then keeps whatever pose the robot is
+    // already in and runs gestures from there.
+    bool        skip_move_home = false;
 
     // --- loop ---
     int    loop_rate_hz    = 60;

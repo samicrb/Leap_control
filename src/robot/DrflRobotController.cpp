@@ -243,11 +243,16 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
               last_error_.c_str(), g_access_grant.load(), g_robot_state.load());
         return false;
     }
-    // DRFL: planned movel to the safe pose at a conservative speed.
+    // DRFL: planned movel to the safe pose. Profile is intentionally very
+    // gentle so the controller's joint-speed / collision supervisions are
+    // unlikely to trip on the initial approach. If a SAFE_STOP still fires
+    // at these speeds, the cause is not velocity-related (workspace zone,
+    // collision sensitivity, singularity) - set robot.skip_move_home=true
+    // and inspect the pendant.
     float target[6] = { (float)safe.x, (float)safe.y, (float)safe.z,
                         (float)safe.rx, (float)safe.ry, (float)safe.rz };
-    float vel[2]   = { 50.0f, 10.0f };   // mm/s, deg/s
-    float accel[2] = { 200.0f, 60.0f };
+    float vel[2]   = { 20.0f, 5.0f };    // mm/s, deg/s
+    float accel[2] = { 50.0f, 20.0f };
     // MOVE_REFERENCE_BASE, blocking.
     if (!p_->drfl.movel(target, vel, accel, 0.0f, MOVE_MODE_ABSOLUTE,
                         MOVE_REFERENCE_BASE, 0.0f, BLENDING_SPEED_TYPE_DUPLICATE)) {

@@ -46,7 +46,9 @@ bool Application::initialise() {
     }
     RobotPose safe{cfg_.safe_x, cfg_.safe_y, cfg_.safe_z,
                    cfg_.safe_rx, cfg_.safe_ry, cfg_.safe_rz};
-    if (!robot_.moveHome(safe)) {
+    if (cfg_.skip_move_home) {
+        LOG_I("moveHome skipped (robot.skip_move_home=true).");
+    } else if (!robot_.moveHome(safe)) {
         LOG_W("moveHome failed: %s", robot_.lastError().c_str());
     }
     if (!gripper_.connect()) {
