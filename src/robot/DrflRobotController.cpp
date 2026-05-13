@@ -2,19 +2,17 @@
 //
 // DRFL 1.33.x integration shim (validated against API-DRFL 1.33.3).
 //
-// Canonical DRFL bring-up sequence used here (matches the official
-// API-DRFL Windows example, 1.33.3):
+// Canonical DRFL bring-up sequence used here:
 //   1. open_connection(ip, port)
 //   2. setup_monitoring_version(1)
-//   3. set_on_monitoring_data_ex(no-op)   <-- mandatory for motion to work
-//   4. set_on_monitoring_state + set_on_log_alarm
-//   5. set_on_monitoring_access_control
-//   6. manage_access_control(FORCE_REQUEST), wait for GRANT
-//   7. if state == STATE_SAFE_OFF: set_robot_control(CONTROL_SERVO_ON)
-//   8. wait for state == STATE_STANDBY
-//   9. set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-//  10. set_robot_system(ROBOT_SYSTEM_REAL)
-//  11. movel / speedl / stop
+//   3. register monitoring callbacks (state, access control, log alarm)
+//   4. manage_access_control(MANAGE_ACCESS_CONTROL_FORCE_REQUEST)
+//   5. wait for MONITORING_ACCESS_CONTROL_GRANT (timeout cfg_.connect_timeout_s)
+//   6. if state == STATE_SAFE_OFF: set_robot_control(CONTROL_SERVO_ON)
+//   7. wait for state == STATE_STANDBY
+//   8. set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+//   9. set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_STOP)
+//  10. movel / speedl / stop
 //
 // DRFL exposes plain-C callback function pointers (no userdata channel).
 // We therefore stash the bits of state callbacks need in file-scope atomics.
@@ -88,14 +86,6 @@ void onLogAlarm(LPLOG_ALARM pLogAlarm) {
           pLogAlarm->_szParam[0], pLogAlarm->_szParam[1], pLogAlarm->_szParam[2]);
 }
 
-// Empty monitoring-data callback. DRFL appears to require *some* data
-// callback to be registered for motion commands to be honoured by the
-// safety controller - the official example registers OnMonitoringDataExCB
-// for exactly this reason even though it does nothing with the data.
-void onMonitoringDataEx(LPMONITORING_DATA_EX /*pData*/) {
-    // intentionally empty
-}
-
 // Block until the predicate becomes true or `timeout_s` elapses.
 template <typename Pred>
 bool waitFor(Pred pred, double timeout_s) {
@@ -141,15 +131,10 @@ bool DrflRobotController::connect(const std::string& ip, int port, double /*time
 
     // 2. Subscribe to the monitoring stream and register callbacks BEFORE
     //    we request control authority so the GRANT event isn't missed.
-    //    The monitoring_data_ex callback is mandatory: without it, the
-    //    safety controller treats the external client as "not real-time
-    //    capable" and silently refuses every motion command (the symptom
-    //    is exactly an immediate SAFE_OFF on the first movel / speedl).
     g_robot_state.store(static_cast<int>(STATE_NOT_READY));
     g_access_grant.store(0);
     g_alarm_seen.store(false);
     p_->drfl.setup_monitoring_version(1);
-    p_->drfl.set_on_monitoring_data_ex(onMonitoringDataEx);
     p_->drfl.set_on_monitoring_state(onMonitoringState);
     p_->drfl.set_on_monitoring_access_control(onMonitoringAccessControl);
     p_->drfl.set_on_log_alarm(onLogAlarm);
@@ -218,14 +203,18 @@ bool DrflRobotController::engage() {
     // 6. Autonomous mode (no teach-pendant gating of subsequent motions).
     p_->drfl.set_robot_mode(ROBOT_MODE_AUTONOMOUS);
 
-    // 7. Tell DRFL we're running against the REAL controller (not the
-    //    virtual simulator). Some 1.33.x point releases default to
-    //    ROBOT_SYSTEM_VIRTUAL after open_connection, in which case any
-    //    movel against the real controller is silently refused.
-    p_->drfl.set_robot_system(ROBOT_SYSTEM_REAL);
+    // 7. Force the safety mode into AUTONOMOUS. Some controllers boot in
+    //    SAFETY_MODE_MANUAL (collaborative speed-limited) and trip a
+    //    SAFE_STOP as soon as a movel exceeds the manual-mode speed cap.
+    //    Pinning SAFETY_MODE_AUTONOMOUS here removes that footgun.
+    if (!p_->drfl.set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_STOP)) {
+        last_error_ = "set_safety_mode(AUTONOMOUS, STOP) failed";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
 #endif
     engaged_.store(true);
-    LOG_I("Robot engaged (authority + servo ON + STANDBY + AUTONOMOUS/REAL).");
+    LOG_I("Robot engaged (authority + servo ON + STANDBY + safety=AUTONOMOUS).");
     return true;
 }
 
