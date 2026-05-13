@@ -10,9 +10,9 @@ namespace dgd {
 
 struct Config {
     // --- robot ---
-    std::string robot_ip       = "192.168.137.100";
+    std::string robot_ip       = "192.168.1.2";
     int         robot_port     = 12345;
-    std::string robot_model    = "A0912";
+    std::string robot_model    = "A0509";
     double      connect_timeout_s = 5.0;
 
     // --- loop ---
@@ -23,14 +23,18 @@ struct Config {
     double max_ang_accel   = 120.0;
 
     // --- workspace envelope (mm, deg) ---
-    double ws_x_min = 300.0, ws_x_max = 600.0;
-    double ws_y_min = -200.0, ws_y_max = 200.0;
-    double ws_z_min = 150.0, ws_z_max = 450.0;
-    double ws_rx_range = 30.0, ws_ry_range = 30.0, ws_rz_range = 60.0;
+    // When ws_enabled = false the box and orientation cone are NOT enforced
+    // (only hard speed/accel caps still apply). Useful for initial bring-up
+    // before the cell has been characterised.
+    bool   ws_enabled = false;
+    double ws_x_min = -300.0, ws_x_max = 400.0;
+    double ws_y_min = 200.0,  ws_y_max = 600.0;
+    double ws_z_min = 150.0,  ws_z_max = 600.0;
+    double ws_rx_range = 45.0, ws_ry_range = 45.0, ws_rz_range = 90.0;
 
-    // --- safe pose ---
-    double safe_x = 450.0, safe_y = 0.0, safe_z = 300.0;
-    double safe_rx = 0.0, safe_ry = 180.0, safe_rz = 0.0;
+    // --- safe pose (robot BASE frame) ---
+    double safe_x  =  55.0, safe_y = 400.0, safe_z = 375.0;
+    double safe_rx =  33.0, safe_ry =  96.0, safe_rz = 110.0;
 
     // --- gesture ---
     double grab_closed_threshold = 0.85;
@@ -48,7 +52,7 @@ struct Config {
     int    sign_x = 1, sign_y = 1, sign_z = 1;
     int    sign_rx = 1, sign_ry = 1, sign_rz = 1;
 
-    // --- gripper ---
+    // --- gripper (generic tool-DO end-effector) ---
     double gripper_open_mm    = 170.0;
     double gripper_close_mm   = 50.0;
     double gripper_neutral_min_mm = 80.0;
@@ -56,6 +60,8 @@ struct Config {
     double gripper_facing_dot_max = -0.5;
     double gripper_cooldown_s = 0.8;
     double gripper_gesture_hold_s = 0.25;
+    int    gripper_open_do_index  = 2;
+    int    gripper_close_do_index = 1;
 
     // --- button ---
     std::string button_mode = "keyboard";

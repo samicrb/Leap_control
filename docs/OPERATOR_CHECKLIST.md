@@ -6,9 +6,9 @@ Print this page and keep it next to the supervisor PC during the event.
 
 ## A. Cold-start sequence
 
-- [ ] Robot controller powered, emergency stop released.
-- [ ] Leap Motion 1 sensor plugged in (USB), LED visible.
-- [ ] Ultraleap service (Gemini V5.x) running on the host PC.
+- [ ] Robot controller (A0509, V3.5) powered, emergency stop released.
+- [ ] Leap Motion sensor plugged in (USB), LED visible.
+- [ ] Ultraleap service (Gemini 6.2.0) running on the host PC.
 - [ ] Demo object positioned on the pick spot.
 - [ ] PC console window visible to the operator.
 - [ ] `doosan_gesture_demo.exe` launched. Header reads **DEMO INACTIVE**.
@@ -40,8 +40,10 @@ Go through each step. Expected result in parentheses.
     returns to `READY` immediately after the impulse.
 12. **Repeat the gripper gesture the other way.** Expected: **OPEN**
     impulse.
-13. **Push the hand toward a workspace boundary.** The UI shows
-    `[LIMIT]`; the robot slides along the limit but does not cross it.
+13. **Workspace envelope test** (only if `workspace.enabled = true`):
+    push the hand toward a workspace boundary. The UI shows `[LIMIT]`;
+    the robot slides along the limit but does not cross it. If the
+    envelope is disabled (default), skip this step.
 
 ## C. Full pick-and-place cycle
 
@@ -58,7 +60,7 @@ Go through each step. Expected result in parentheses.
 
 - [ ] Quick recenter test (steps 6–7 of section B).
 - [ ] One pick-and-place dry cycle without a visitor.
-- [ ] Verify the workspace limit still behaves (step 13).
+- [ ] Verify the workspace limit still behaves (step 13) — only if enabled.
 
 ## E. Shutdown
 
@@ -77,7 +79,7 @@ Go through each step. Expected result in parentheses.
 | Robot feels nervous                           | Increase smoothing by 0.05. Increase dead-zone by 1 mm.             |
 | Gripper double-triggers                       | Raise `gripper.cooldown_s` to 1.2.                                   |
 | Gripper never triggers                        | Check two-hand posture: palms must face each other. Relax `facing_dot_max` to `-0.3`. |
-| Workspace limit hit too often                 | Widen envelope carefully; test reach first.                         |
+| Workspace limit hit too often                 | Widen envelope carefully; test reach first. Or set `workspace.enabled = false` for free motion. |
 | `FAULT` keeps returning                       | Check log for the reason. Usually: hand loss, sensor stutter.       |
 | Robot disconnects during the run              | Verify cable. Restart app. Verify `robot.ip` / port.                |
 

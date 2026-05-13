@@ -7,7 +7,7 @@
 //   HAVE_LEAPC=0  -> stub that pretends the sensor is disconnected so the
 //                    rest of the pipeline can run on a dev machine.
 //
-// LeapC API reference: Ultraleap Gemini V5 documentation. Functions used:
+// LeapC API reference: Ultraleap Gemini 6.2.0 documentation. Functions used:
 //   LeapCreateConnection, LeapOpenConnection, LeapPollConnection,
 //   LeapDestroyConnection, LEAP_TRACKING_EVENT, LEAP_HAND.
 //

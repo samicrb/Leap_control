@@ -1,9 +1,13 @@
 # Doosan Open-House Gesture-Control Demo
 
-Gesture-driven teleoperation of a **Doosan A0912** (controller V3.5, DRFL 1.33.2)
-using an **Ultraleap Leap Motion Controller 1** with the **Gemini V5.x / LeapC**
+Gesture-driven teleoperation of a **Doosan A0509** (controller V3.5, DRFL 1.33.2)
+using an **Ultraleap Leap Motion Controller** with the **Gemini 6.2.0 / LeapC**
 tracking stack. Built for a public open-house event: robust, predictable,
-operator-friendly, and intentionally small-workspace.
+operator-friendly.
+
+> The robot model, IP, safe pose, gripper wiring and workspace envelope are
+> all driven from `config/demo_config.ini` — porting to another Doosan model
+> (A0912, M-series, etc.) is a config-only change.
 
 > **Not a product.** This is a demo-grade skeleton: safety-first, conservative
 > speeds, explicit state machine, and clean adapter boundaries so you can swap
@@ -18,7 +22,7 @@ operator-friendly, and intentionally small-workspace.
   - **Right hand** = control hand (closed fist = drive, open = freeze/recenter).
   - **Both hands facing + distance** = gripper open/close impulse.
 - External supervisor button gates every motion (default: SPACE).
-- Bounded demo workspace in Cartesian + orientation.
+- Optional bounded demo workspace (`workspace.enabled`) in Cartesian + orientation.
 - Hard speed / acceleration caps, dead-zones, light EMA smoothing.
 - Console UI for operator supervision.
 - Explicit state machine: `Idle / Ready / Position / Orientation / Recenter /
@@ -46,7 +50,7 @@ Leap_control/
 │   ├── gesture/{GestureInterpreter,GestureTypes}.{hpp,cpp}
 │   ├── state/{StateMachine,States}.{hpp,cpp}
 │   ├── robot/{IRobotController,DrflRobotController,WorkspaceGuard,RobotPose}.{hpp,cpp}
-│   ├── gripper/{IGripperController,SchunkGripperController}.{hpp,cpp}
+│   ├── gripper/{IGripperController,ToolIoGripperController}.{hpp,cpp}
 │   ├── input/{IExternalButton,KeyboardButton}.{hpp,cpp}
 │   ├── ui/ConsoleUI.{hpp,cpp}
 │   └── util/{Logger,MathUtils}.{hpp,cpp}
@@ -58,7 +62,7 @@ Leap_control/
 
 Prerequisites:
 - Visual Studio 2022 + CMake
-- Ultraleap Gemini V5.x installed (`LeapC.h`, `LeapC.lib`)
+- Ultraleap Gemini 6.2.0 installed (`LeapC.h`, `LeapC.lib`)
 - Doosan DRFL 1.33.2 SDK unpacked (`DRFLEx.h`, `DRFL.lib`)
 
 ```powershell
@@ -97,10 +101,16 @@ pressed **and** both hands are detected in the right posture.
 
 ## 5. Robot connection
 
-Edit `robot.ip`, `robot.port`, and the **safe pose** in
-`config/demo_config.ini` to match the cell. Keep `dryrun.robot = true` until
-you have walked the cell and confirmed nothing else will move during the
-gesture.
+Defaults shipped: `robot.ip = 192.168.1.2`, `robot.model = A0509`, safe pose
+`x=55 y=400 z=375 rx=33 ry=96 rz=110` (mm/deg, BASE frame). Edit any of those
+plus `robot.port` in `config/demo_config.ini` if the cell differs. Keep
+`dryrun.robot = true` until you have walked the cell and confirmed nothing
+else will move during the gesture.
+
+The demo workspace envelope is **disabled by default** (`workspace.enabled
+= false`). Only the hard speed / acceleration caps are active. Turn it on
+and tune the box once the cell is characterised — see
+`docs/TUNING_GUIDE.md`.
 
 ## 6. Hardware integration points
 
@@ -128,6 +138,7 @@ See `docs/OPERATOR_CHECKLIST.md` for the full demo-day test protocol.
 Public demo. The code is conservative on purpose. Do **not**:
 - raise `robot.max_lin_speed` above ~200 mm/s without safety review,
 - enlarge `workspace.*` before you know what the cell permits,
+- leave `workspace.enabled = false` once the cell is fully characterised,
 - disable smoothing or dead-zones for a "cooler" feel,
 - skip the external button gate.
 

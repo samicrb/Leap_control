@@ -5,7 +5,7 @@
 namespace dgd {
 
 // Sensor abstraction. Implementations:
-//   - LeapSource (real LeapC / Gemini V5.x) - production path on event PC.
+//   - LeapSource (real LeapC / Gemini 6.2.0) - production path on event PC.
 //   - LeapStubSource (always returns empty frame) - enabled when the
 //     LeapC SDK is not present at build time, used for CI / smoke tests.
 class ILeapSource {

@@ -54,7 +54,7 @@ set(APP_SOURCES
     src/state/StateMachine.cpp
     src/robot/DrflRobotController.cpp
     src/robot/WorkspaceGuard.cpp
-    src/gripper/SchunkGripperController.cpp
+    src/gripper/ToolIoGripperController.cpp
     src/input/KeyboardButton.cpp
     src/ui/ConsoleUI.cpp
     src/util/Logger.cpp
