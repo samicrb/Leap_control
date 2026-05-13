@@ -266,6 +266,10 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
     }
     // Profile is intentionally very gentle so the joint-speed / collision
     // supervisions are unlikely to trip on the initial approach.
+    //
+    // Doosan posx convention: target[3..5] are (W, P, R) - Doosan ZYZ'
+    // intrinsic Euler in degrees. Our RobotPose names them rx/ry/rz for
+    // historical reasons but maps to W/P/R one-for-one (see RobotPose.hpp).
     float target[6] = { (float)safe.x, (float)safe.y, (float)safe.z,
                         (float)safe.rx, (float)safe.ry, (float)safe.rz };
 

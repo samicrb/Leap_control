@@ -56,7 +56,11 @@ struct Config {
     double ws_z_min = 150.0,  ws_z_max = 600.0;
     double ws_rx_range = 45.0, ws_ry_range = 45.0, ws_rz_range = 90.0;
 
-    // --- safe pose (robot BASE frame) ---
+    // --- safe pose (robot BASE frame; Doosan ZYZ' Euler) ---
+    // safe_rx/ry/rz match the pendant display order [W, P, R]:
+    //   safe_rx == W  : rotation about BASE Z
+    //   safe_ry == P  : rotation about Y'   (intermediate)
+    //   safe_rz == R  : rotation about Z''  (final)
     double safe_x  =  55.0, safe_y = 400.0, safe_z = 375.0;
     double safe_rx =  33.0, safe_ry =  96.0, safe_rz = 110.0;
 

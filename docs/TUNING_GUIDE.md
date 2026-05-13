@@ -116,6 +116,13 @@ with only the speed/accel caps. Once the cell is characterised:
 3. Gradually widen X/Y/Z until the motion is visually rich but the arm
    cannot reach anything fragile.
 
+> **Orientation convention.** `workspace.rx_range / ry_range / rz_range`
+> are applied as `±range` around `safe_pose.rx / ry / rz`. Per the Doosan
+> V3.5 convention those fields are **ZYZ' intrinsic Euler (W, P, R)** —
+> NOT rotations around the BASE X/Y/Z axes. So `rx_range` constrains W
+> (Z-axis yaw), `ry_range` constrains P (Y'-axis pitch),
+> `rz_range` constrains R (Z''-axis roll). Pick ranges with that in mind.
+
 ### 2.7 Speed / acceleration caps
 
 ```
