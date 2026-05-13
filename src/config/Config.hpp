@@ -25,14 +25,15 @@ struct Config {
     // motions keep tripping a phantom collision SAFE_STOP. Re-enable
     // (50-75) once payload and TCP are configured for production.
     int         collision_sensitivity = 0;
-    // Singularity handling mode for movel / speedl:
-    //   0 = NONE   - ignore singularity warnings, keep moving
-    //   1 = MANUAL - default; stop on entering a singular region
-    //   2 = AUTO   - bypass: blend through the singularity automatically
-    // MANUAL (1) is the controller default and trips a SAFE_STOP on any
-    // Cartesian path that grazes a wrist singularity (e.g. Ry near 0/180).
-    // AUTO (2) is the demo-friendly choice.
-    int         singularity_handling = 2;
+    // Singularity handling mode for movel / speedl. Maps directly onto
+    // the Doosan SINGULARITY_AVOIDANCE enum:
+    //   0 = AVOID  - blend through the singularity automatically
+    //   1 = STOP   - default; halt motion on entering a singular region
+    //                (this is what trips alarm 3205 -> SAFE_OFF 7056)
+    //   2 = VEL    - reduce velocity in the singular region
+    // AVOID (0) is the demo-friendly choice for any path that may graze
+    // a wrist singularity (e.g. ry near 0/180 in ZYZ' Euler).
+    int         singularity_handling = 0;
     // If true, the safe-pose approach uses movejx (joint-space interp to
     // a Cartesian target) instead of movel (Cartesian linear). movejx
     // ignores Cartesian path singularities so it's the robust choice for

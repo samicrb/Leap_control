@@ -251,19 +251,21 @@ bool DrflRobotController::engage() {
     //    payload / TCP declared on the controller doesn't match the
     //    actual mount, even gentle motion produces "unexpected" torques
     //    and trips a SAFE_OFF mid-trajectory. Override here so bring-up
-    //    isn't blocked. 0 == disabled.
-    p_->drfl.set_collision_sensitivity(
-        static_cast<unsigned int>(cfg_.collision_sensitivity));
+    //    isn't blocked. 0.0 == disabled, 100.0 == most sensitive.
+    p_->drfl.change_collision_sensitivity(
+        static_cast<float>(cfg_.collision_sensitivity));
     LOG_I("Collision sensitivity set to %d (0 = disabled).",
           cfg_.collision_sensitivity);
 
-    // 9. Singularity handling. Default is MANUAL (1) which stops the
-    //    motion on entering a singular region - that's what trips
-    //    alarm 3205 followed by SAFE_OFF (7056) on the safe-pose movel.
-    //    Mode 2 (AUTO) makes the controller blend through automatically.
-    p_->drfl.set_singular_handling(
-        static_cast<unsigned int>(cfg_.singularity_handling));
-    LOG_I("Singularity handling set to %d (0=NONE, 1=MANUAL, 2=AUTO).",
+    // 9. Singularity handling. Default is STOP (1) which stops the motion
+    //    on entering a singular region - that's what trips alarm 3205
+    //    followed by SAFE_OFF (7056) on the safe-pose movel. AVOID (0)
+    //    makes the controller blend through automatically; VEL (2)
+    //    reduces velocity in the region.
+    //    Doosan SINGULARITY_AVOIDANCE enum: AVOID=0, STOP=1, VEL=2.
+    p_->drfl.set_singularity_handling(
+        static_cast<SINGULARITY_AVOIDANCE>(cfg_.singularity_handling));
+    LOG_I("Singularity handling set to %d (0=AVOID, 1=STOP, 2=VEL).",
           cfg_.singularity_handling);
 #endif
     engaged_.store(true);
@@ -308,14 +310,21 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
     if (cfg_.home_use_movejx) {
         // movejx: joint-space interpolation to a Cartesian target.
         // Immune to Cartesian path singularities (which trip alarm 3205
-        // -> SAFE_OFF 7056 on movel for poses like Ry=96 deg). Velocity
-        // / accel here are in JOINT units (deg/s, deg/s^2).
-        float jvel   = 20.0f;   // deg/s
-        float jaccel = 60.0f;   // deg/s^2
-        // sol_space 0 -> let DRFL pick a configuration close to current.
-        if (!p_->drfl.movejx(target, jvel, jaccel, 0.0f, MOVE_MODE_ABSOLUTE,
-                             MOVE_REFERENCE_BASE,
-                             BLENDING_SPEED_TYPE_DUPLICATE, 0)) {
+        // -> SAFE_OFF 7056 on movel for poses like Ry=96 deg).
+        // Signature (DRFL 1.33.3):
+        //   movejx(float target[6], unsigned char iSolutionSpace,
+        //          float fTargetVel, float fTargetAcc,
+        //          float fTargetTime = 0, MOVE_MODE = ABSOLUTE,
+        //          MOVE_REFERENCE = BASE, float fBlendingRadius = 0,
+        //          BLENDING_SPEED_TYPE = DUPLICATE)
+        // iSolutionSpace=0 -> let DRFL pick a configuration close to
+        // current. vel/acc are JOINT units (deg/s, deg/s^2).
+        const unsigned char sol_space = 0;
+        const float jvel   = 20.0f;  // deg/s
+        const float jaccel = 60.0f;  // deg/s^2
+        if (!p_->drfl.movejx(target, sol_space, jvel, jaccel, 0.0f,
+                             MOVE_MODE_ABSOLUTE, MOVE_REFERENCE_BASE,
+                             0.0f, BLENDING_SPEED_TYPE_DUPLICATE)) {
             last_error_ = "DRFL movejx(home) failed (state="
                         + std::to_string(g_robot_state.load()) + ")";
             LOG_E("%s", last_error_.c_str());
