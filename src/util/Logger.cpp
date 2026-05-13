@@ -22,7 +22,13 @@ void Logger::configure(LogLevel level, const std::string& file_path) {
         file_ = nullptr;
     }
     if (!file_path.empty()) {
+#if defined(_WIN32)
+        std::FILE* f = nullptr;
+        if (fopen_s(&f, file_path.c_str(), "a") != 0) f = nullptr;
+        file_ = f;
+#else
         file_ = std::fopen(file_path.c_str(), "a");
+#endif
         if (!file_) {
             std::fprintf(stderr, "[logger] cannot open log file '%s'\n", file_path.c_str());
         }
