@@ -122,12 +122,16 @@ void DrflRobotController::disengage() {
     if (!engaged_.load()) return;
     stopMotion();
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    // DRFL 1.33.2 does not expose CONTROL_SERVO_OFF; the canonical way to
-    // return the controller to a non-servo state is CONTROL_INIT_STANDBY.
-    p_->drfl.set_robot_control(CONTROL_INIT_STANDBY); // DRFL:
+    // DRFL 1.33.2's ROBOT_CONTROL enum varies between point releases and
+    // does NOT consistently expose CONTROL_SERVO_OFF / CONTROL_INIT_STANDBY.
+    // stop(STOP_TYPE_QUICK) above already halts motion; close_connection()
+    // (called from disconnect()) returns the controller to a safe state.
+    // If your installed DRFLEx.h exposes an explicit "servo off" enumerant
+    // (e.g. CONTROL_SAFE_OFF, CONTROL_INIT_NORMAL, CONTROL_INIT_STANDBY),
+    // add the corresponding set_robot_control(...) call here.
 #endif
     engaged_.store(false);
-    LOG_I("Robot disengaged (servo OFF).");
+    LOG_I("Robot disengaged (motion stopped).");
 }
 
 bool DrflRobotController::moveHome(const RobotPose& safe) {
