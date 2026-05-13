@@ -27,7 +27,16 @@
 #include <thread>
 
 #if defined(HAVE_DRFL) && HAVE_DRFL
+  // DRFL 1.33.2 headers ship with several C4244 conversions on MSVC /W4.
+  // Localise the suppression so the rest of our code keeps building clean.
+  #ifdef _MSC_VER
+    #pragma warning(push)
+    #pragma warning(disable: 4244)
+  #endif
   #include <DRFLEx.h>
+  #ifdef _MSC_VER
+    #pragma warning(pop)
+  #endif
   using namespace DRAFramework;
 #endif
 
@@ -113,7 +122,9 @@ void DrflRobotController::disengage() {
     if (!engaged_.load()) return;
     stopMotion();
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    p_->drfl.set_robot_control(CONTROL_SERVO_OFF); // DRFL:
+    // DRFL 1.33.2 does not expose CONTROL_SERVO_OFF; the canonical way to
+    // return the controller to a non-servo state is CONTROL_INIT_STANDBY.
+    p_->drfl.set_robot_control(CONTROL_INIT_STANDBY); // DRFL:
 #endif
     engaged_.store(false);
     LOG_I("Robot disengaged (servo OFF).");
@@ -197,15 +208,16 @@ void DrflRobotController::stopMotion() {
 bool DrflRobotController::getCurrentPose(RobotPose& out) {
     if (!connected_.load()) return false;
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    // DRFL: latest measured TCP pose.
-    LPROBOT_POSE p = p_->drfl.get_current_posx();
+    // DRFL: latest measured TCP pose. get_current_posx() returns the task-
+    // space pose (LPROBOT_TASK_POSE), whose payload lives in _fTargetPos.
+    LPROBOT_TASK_POSE p = p_->drfl.get_current_posx();
     if (!p) return false;
-    out.x  = p->_fPosition[0];
-    out.y  = p->_fPosition[1];
-    out.z  = p->_fPosition[2];
-    out.rx = p->_fPosition[3];
-    out.ry = p->_fPosition[4];
-    out.rz = p->_fPosition[5];
+    out.x  = p->_fTargetPos[0];
+    out.y  = p->_fTargetPos[1];
+    out.z  = p->_fTargetPos[2];
+    out.rx = p->_fTargetPos[3];
+    out.ry = p->_fTargetPos[4];
+    out.rz = p->_fTargetPos[5];
     {
         std::lock_guard<std::mutex> lock(pose_mx_);
         current_pose_ = out; // keep simulator in sync
