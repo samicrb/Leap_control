@@ -59,31 +59,8 @@ std::atomic<int>  g_robot_state{static_cast<int>(STATE_NOT_READY)};
 std::atomic<int>  g_access_grant{0};   // 0 pending, 1 granted, -1 lost/denied
 std::atomic<bool> g_alarm_seen{false};
 
-const char* stateName(int s) {
-    switch (static_cast<ROBOT_STATE>(s)) {
-        case STATE_INITIALIZING:    return "INITIALIZING";
-        case STATE_STANDBY:         return "STANDBY";
-        case STATE_MOVING:          return "MOVING";
-        case STATE_SAFE_OFF:        return "SAFE_OFF";
-        case STATE_TEACHING:        return "TEACHING";
-        case STATE_SAFE_STOP:       return "SAFE_STOP";
-        case STATE_EMERGENCY_STOP:  return "EMERGENCY_STOP";
-        case STATE_HOMING:          return "HOMING";
-        case STATE_RECOVERY:        return "RECOVERY";
-        case STATE_SAFE_STOP2:      return "SAFE_STOP2";
-        case STATE_SAFE_OFF2:       return "SAFE_OFF2";
-        case STATE_NOT_READY:       return "NOT_READY";
-        default:                    return "UNKNOWN";
-    }
-}
-
 void onMonitoringState(const ROBOT_STATE eState) {
-    int prev = g_robot_state.exchange(static_cast<int>(eState));
-    if (prev != static_cast<int>(eState)) {
-        // Surface every transition so a SAFE_STOP / SAFE_OFF mid-motion is
-        // visible in the demo log.
-        LOG_I("DRFL state: %s -> %s", stateName(prev), stateName(static_cast<int>(eState)));
-    }
+    g_robot_state.store(static_cast<int>(eState));
 }
 void onMonitoringAccessControl(const MONITORING_ACCESS_CONTROL eTrans) {
     switch (eTrans) {
@@ -98,15 +75,8 @@ void onMonitoringAccessControl(const MONITORING_ACCESS_CONTROL eTrans) {
             break;
     }
 }
-void onLogAlarm(LPLOG_ALARM pLogAlarm) {
+void onLogAlarm(LPLOG_ALARM /*pLogAlarm*/) {
     g_alarm_seen.store(true);
-    if (!pLogAlarm) return;
-    // LOG_ALARM fields are vendor-defined: _iLevel, _iGroup, _iIndex, and
-    // up to three string params. Surfacing them is the single most useful
-    // diagnostic when the controller trips a safety stop mid-motion.
-    LOG_E("DRFL alarm: level=%d group=%d index=%d params=[%s | %s | %s]",
-          pLogAlarm->_iLevel, pLogAlarm->_iGroup, pLogAlarm->_iIndex,
-          pLogAlarm->_szParam[0], pLogAlarm->_szParam[1], pLogAlarm->_szParam[2]);
 }
 
 // Block until the predicate becomes true or `timeout_s` elapses.
@@ -257,12 +227,10 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
         return false;
     }
     // DRFL: planned movel to the safe pose at a conservative speed.
-    // Keep this gentle — aggressive accel near a singular orientation has
-    // been observed to trip a safety stop on cobots.
     float target[6] = { (float)safe.x, (float)safe.y, (float)safe.z,
                         (float)safe.rx, (float)safe.ry, (float)safe.rz };
-    float vel[2]   = { 30.0f, 6.0f };    // mm/s, deg/s
-    float accel[2] = { 100.0f, 30.0f };
+    float vel[2]   = { 50.0f, 10.0f };   // mm/s, deg/s
+    float accel[2] = { 200.0f, 60.0f };
     // MOVE_REFERENCE_BASE, blocking.
     if (!p_->drfl.movel(target, vel, accel, 0.0f, MOVE_MODE_ABSOLUTE,
                         MOVE_REFERENCE_BASE, 0.0f, BLENDING_SPEED_TYPE_DUPLICATE)) {
