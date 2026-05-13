@@ -1,33 +1,37 @@
 // DrflRobotController.cpp
 //
-// DRFL 1.33.2 integration shim.
+// DRFL 1.33.x integration shim (validated against API-DRFL 1.33.3).
 //
-// The Doosan V3.5 controller exposes a realtime external control mode
-// reachable via DRFL. For a gesture-driven demo the natural primitives
-// are:
-//   - movej / movel  : blocking planned motions (used by moveHome)
-//   - speedl         : stream an instantaneous Cartesian velocity twist
-//   - stop           : safe emergency halt
+// Canonical DRFL bring-up sequence used here:
+//   1. open_connection(ip, port)
+//   2. setup_monitoring_version(1)
+//   3. register monitoring callbacks (state, access control, log alarm)
+//   4. manage_access_control(MANAGE_ACCESS_CONTROL_FORCE_REQUEST)
+//   5. wait for MONITORING_ACCESS_CONTROL_GRANT (timeout cfg_.connect_timeout_s)
+//   6. if state == STATE_SAFE_OFF: set_robot_control(CONTROL_SERVO_ON)
+//   7. wait for state == STATE_STANDBY
+//   8. set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+//   9. movel / speedl / stop
 //
-// This adapter assumes those names. If your installed DRFL header uses
-// CamelCase wrappers (e.g. DRFL::movel vs movel) just update the lines
-// tagged "// DRFL:".
+// DRFL exposes plain-C callback function pointers (no userdata channel).
+// We therefore stash the bits of state callbacks need in file-scope atomics.
+// Only one DrflRobotController is constructed per process, which makes
+// this safe.
 //
 // Build modes:
 //   HAVE_DRFL=1 -> real DRFL calls
 //   HAVE_DRFL=0 -> cooperative simulator (default on dev machines)
-//
-// This file is deliberately the only place where DRFL appears.
 
 #include "robot/DrflRobotController.hpp"
 #include "util/Logger.hpp"
 
 #include <chrono>
 #include <cstring>
+#include <string>
 #include <thread>
 
 #if defined(HAVE_DRFL) && HAVE_DRFL
-  // DRFL 1.33.2 headers ship with several C4244 conversions on MSVC /W4.
+  // DRFL 1.33.x headers ship with several C4244 conversions on MSVC /W4.
   // Localise the suppression so the rest of our code keeps building clean.
   #ifdef _MSC_VER
     #pragma warning(push)
@@ -48,6 +52,45 @@ double nowSeconds() {
     static const auto t0 = clock::now();
     return std::chrono::duration<double>(clock::now() - t0).count();
 }
+
+#if defined(HAVE_DRFL) && HAVE_DRFL
+// DRFL monitoring callbacks. File-scope state; single-instance assumption.
+std::atomic<int>  g_robot_state{static_cast<int>(STATE_NOT_READY)};
+std::atomic<int>  g_access_grant{0};   // 0 pending, 1 granted, -1 lost/denied
+std::atomic<bool> g_alarm_seen{false};
+
+void onMonitoringState(const ROBOT_STATE eState) {
+    g_robot_state.store(static_cast<int>(eState));
+}
+void onMonitoringAccessControl(const MONITORING_ACCESS_CONTROL eTrans) {
+    switch (eTrans) {
+        case MONITORING_ACCESS_CONTROL_GRANT:
+            g_access_grant.store(1);
+            break;
+        case MONITORING_ACCESS_CONTROL_DENY:
+        case MONITORING_ACCESS_CONTROL_LOSS:
+            g_access_grant.store(-1);
+            break;
+        default:
+            break;
+    }
+}
+void onLogAlarm(LPLOG_ALARM /*pLogAlarm*/) {
+    g_alarm_seen.store(true);
+}
+
+// Block until the predicate becomes true or `timeout_s` elapses.
+template <typename Pred>
+bool waitFor(Pred pred, double timeout_s) {
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::duration<double>(timeout_s);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return pred();
+}
+#endif
 } // namespace
 
 struct DrflRobotController::Impl {
@@ -72,15 +115,23 @@ bool DrflRobotController::connect(const std::string& ip, int port, double /*time
     }
 
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    // DRFL: connect to controller.
+    // 1. Open the TCP link to the controller.
     if (!p_->drfl.open_connection(ip.c_str(), static_cast<unsigned int>(port))) {
         last_error_ = "DRFL open_connection failed";
         LOG_E("%s", last_error_.c_str());
         return false;
     }
-    // DRFL: set robot mode to manual/auto depending on teaching.
-    p_->drfl.set_robot_mode(ROBOT_MODE_AUTONOMOUS);
-    p_->drfl.set_robot_system(ROBOT_SYSTEM_REAL);
+
+    // 2. Subscribe to the monitoring stream and register callbacks BEFORE
+    //    we request control authority so the GRANT event isn't missed.
+    g_robot_state.store(static_cast<int>(STATE_NOT_READY));
+    g_access_grant.store(0);
+    g_alarm_seen.store(false);
+    p_->drfl.setup_monitoring_version(1);
+    p_->drfl.set_on_monitoring_state(onMonitoringState);
+    p_->drfl.set_on_monitoring_access_control(onMonitoringAccessControl);
+    p_->drfl.set_on_log_alarm(onLogAlarm);
+
     connected_.store(true);
     LOG_I("DRFL connected to %s:%d", ip.c_str(), port);
     return true;
@@ -106,15 +157,47 @@ void DrflRobotController::disconnect() {
 bool DrflRobotController::engage() {
     if (!connected_.load()) return false;
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    // DRFL: set safety/servo on.
-    if (!p_->drfl.set_robot_control(CONTROL_SERVO_ON)) {
-        last_error_ = "set_robot_control(SERVO_ON) failed";
+    // 3. Request authority over the controller. FORCE_REQUEST is the demo-
+    //    friendly variant: it pre-empts whoever currently holds control
+    //    (typically the teach pendant) without asking for confirmation.
+    g_access_grant.store(0);
+    if (!p_->drfl.manage_access_control(MANAGE_ACCESS_CONTROL_FORCE_REQUEST)) {
+        last_error_ = "manage_access_control(FORCE_REQUEST) failed";
         LOG_E("%s", last_error_.c_str());
         return false;
     }
+
+    const double timeout = cfg_.connect_timeout_s > 0.0 ? cfg_.connect_timeout_s : 10.0;
+    if (!waitFor([]{ return g_access_grant.load() == 1; }, timeout)) {
+        last_error_ = "access control not granted within timeout";
+        LOG_E("%s (last state=%d, grant=%d)",
+              last_error_.c_str(), g_robot_state.load(), g_access_grant.load());
+        return false;
+    }
+    LOG_I("DRFL access control GRANTED.");
+
+    // 4. If the robot is in SAFE_OFF (servo off), turn the servos on.
+    if (g_robot_state.load() == static_cast<int>(STATE_SAFE_OFF)) {
+        if (!p_->drfl.set_robot_control(CONTROL_SERVO_ON)) {
+            last_error_ = "set_robot_control(SERVO_ON) failed";
+            LOG_E("%s", last_error_.c_str());
+            return false;
+        }
+    }
+
+    // 5. Wait for STATE_STANDBY before any motion command.
+    if (!waitFor([]{ return g_robot_state.load() == static_cast<int>(STATE_STANDBY); },
+                 timeout)) {
+        last_error_ = "robot did not reach STATE_STANDBY";
+        LOG_E("%s (last state=%d)", last_error_.c_str(), g_robot_state.load());
+        return false;
+    }
+
+    // 6. Autonomous mode (no teach-pendant gating of subsequent motions).
+    p_->drfl.set_robot_mode(ROBOT_MODE_AUTONOMOUS);
 #endif
     engaged_.store(true);
-    LOG_I("Robot engaged (servo ON).");
+    LOG_I("Robot engaged (authority + servo ON + STANDBY).");
     return true;
 }
 
@@ -122,16 +205,13 @@ void DrflRobotController::disengage() {
     if (!engaged_.load()) return;
     stopMotion();
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    // DRFL 1.33.2's ROBOT_CONTROL enum varies between point releases and
-    // does NOT consistently expose CONTROL_SERVO_OFF / CONTROL_INIT_STANDBY.
-    // stop(STOP_TYPE_QUICK) above already halts motion; close_connection()
-    // (called from disconnect()) returns the controller to a safe state.
-    // If your installed DRFLEx.h exposes an explicit "servo off" enumerant
-    // (e.g. CONTROL_SAFE_OFF, CONTROL_INIT_NORMAL, CONTROL_INIT_STANDBY),
-    // add the corresponding set_robot_control(...) call here.
+    // Release control authority politely. close_connection() (called from
+    // disconnect()) returns the controller to a safe state for the teach
+    // pendant.
+    p_->drfl.manage_access_control(MANAGE_ACCESS_CONTROL_RELEASE);
 #endif
     engaged_.store(false);
-    LOG_I("Robot disengaged (motion stopped).");
+    LOG_I("Robot disengaged (motion stopped, authority released).");
 }
 
 bool DrflRobotController::moveHome(const RobotPose& safe) {
@@ -140,6 +220,12 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
           safe.x, safe.y, safe.z, safe.rx, safe.ry, safe.rz);
 
 #if defined(HAVE_DRFL) && HAVE_DRFL
+    if (g_access_grant.load() != 1) {
+        last_error_ = "DRFL movel(home): no access control authority";
+        LOG_E("%s (grant=%d, state=%d)",
+              last_error_.c_str(), g_access_grant.load(), g_robot_state.load());
+        return false;
+    }
     // DRFL: planned movel to the safe pose at a conservative speed.
     float target[6] = { (float)safe.x, (float)safe.y, (float)safe.z,
                         (float)safe.rx, (float)safe.ry, (float)safe.rz };
@@ -148,7 +234,8 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
     // MOVE_REFERENCE_BASE, blocking.
     if (!p_->drfl.movel(target, vel, accel, 0.0f, MOVE_MODE_ABSOLUTE,
                         MOVE_REFERENCE_BASE, 0.0f, BLENDING_SPEED_TYPE_DUPLICATE)) {
-        last_error_ = "DRFL movel(home) failed";
+        last_error_ = "DRFL movel(home) failed (state="
+                    + std::to_string(g_robot_state.load()) + ")";
         LOG_E("%s", last_error_.c_str());
         return false;
     }
