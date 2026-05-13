@@ -275,7 +275,10 @@ bool DrflRobotController::engage() {
 
 void DrflRobotController::disengage() {
     if (!engaged_.load()) return;
-    stopMotion();
+    // Shutdown path: a true halt is appropriate here. Application::run()
+    // typically calls emergencyStop() already, so this is the last-chance
+    // safety net (e.g. destructor / abnormal exit paths).
+    emergencyStop();
 #if defined(HAVE_DRFL) && HAVE_DRFL
     // Note: DRFL 1.33.x does not consistently expose a RELEASE enumerant
     // on MANAGE_ACCESS_CONTROL. close_connection() (invoked from
@@ -283,7 +286,7 @@ void DrflRobotController::disengage() {
     // an explicit release call is not required for a clean shutdown.
 #endif
     engaged_.store(false);
-    LOG_I("Robot disengaged (motion stopped, authority will release on disconnect).");
+    LOG_I("Robot disengaged (motion halted, authority will release on disconnect).");
 }
 
 bool DrflRobotController::moveHome(const RobotPose& safe) {
@@ -390,11 +393,38 @@ bool DrflRobotController::sendCartesianVelocity(const std::array<double, 6>& twi
 }
 
 void DrflRobotController::stopMotion() {
-    std::lock_guard<std::mutex> lock(pose_mx_);
-    last_twist_ = {0,0,0,0,0,0};
+    // SOFT pause: stream zero Cartesian velocity. The controller
+    // decelerates the TCP to a stand-still and holds position. Safe to
+    // call at 60 Hz from passive states (IDLE / READY / RECENTER /
+    // GRIPPER) - issuing STOP_TYPE_QUICK in that hot path is what was
+    // tripping the SAFE_OFF transitions previously observed.
+    {
+        std::lock_guard<std::mutex> lock(pose_mx_);
+        last_twist_ = {0, 0, 0, 0, 0, 0};
+    }
+    if (cfg_.dryrun_robot) return;
 #if defined(HAVE_DRFL) && HAVE_DRFL
     if (connected_.load() && engaged_.load()) {
-        // DRFL: a zero speedl halts streaming; a proper stop is cleaner.
+        float vel[6] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+        float accel[2] = { (float)cfg_.max_lin_accel,
+                           (float)cfg_.max_ang_accel };
+        p_->drfl.speedl(vel, accel, 0.1f);
+    }
+#endif
+}
+
+void DrflRobotController::emergencyStop() {
+    // HARD halt for true faults / shutdown. STOP_TYPE_QUICK can
+    // transition the controller to SAFE_OFF on some configurations, so
+    // restrict this to genuine emergencies, never call it on a 60 Hz
+    // loop.
+    {
+        std::lock_guard<std::mutex> lock(pose_mx_);
+        last_twist_ = {0, 0, 0, 0, 0, 0};
+    }
+    if (cfg_.dryrun_robot) return;
+#if defined(HAVE_DRFL) && HAVE_DRFL
+    if (connected_.load() && engaged_.load()) {
         p_->drfl.stop(STOP_TYPE_QUICK);
     }
 #endif

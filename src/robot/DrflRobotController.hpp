@@ -37,6 +37,7 @@ public:
 
     bool sendCartesianVelocity(const std::array<double, 6>& twist) override;
     void stopMotion() override;
+    void emergencyStop() override;
     bool getCurrentPose(RobotPose& out) override;
 
     std::string lastError() const override { return last_error_; }

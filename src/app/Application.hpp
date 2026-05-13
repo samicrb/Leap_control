@@ -52,6 +52,9 @@ private:
 
     HandFrame          last_frame_{};
     std::atomic<bool>  running_{false};
+    // Latches whether we already fired the one-shot emergencyStop() for
+    // the current Fault entry. Reset whenever we leave the Fault state.
+    bool               fault_emergency_issued_ = false;
 };
 
 } // namespace dgd

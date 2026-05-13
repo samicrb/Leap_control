@@ -85,7 +85,10 @@ int Application::run() {
     }
 
     LOG_I("Application: exiting main loop.");
-    robot_.stopMotion();
+    // Shutdown path: one explicit hard halt before disengage(). The
+    // adapter's disengage() also calls emergencyStop() as a safety net
+    // (it's idempotent), but stating intent here is clearer.
+    robot_.emergencyStop();
     robot_.disengage();
     robot_.disconnect();
     gripper_.disconnect();
@@ -117,9 +120,27 @@ void Application::tick(double now_s) {
     if (cmd.captureReference) interpreter_.captureReference();
 
     // 4. Execute commands.
+    //    cmd.hardStop is set by the state machine in every non-streaming
+    //    state (IDLE, READY, RECENTER, GRIPPER, FAULT). For passive
+    //    states we only need a SOFT pause - the controller decelerates
+    //    via a zero speedl and holds position; this is safe to call at
+    //    60 Hz. Only Fault warrants the hard STOP_TYPE_QUICK path, and
+    //    even there we issue it once on entering the state rather than
+    //    every tick.
     bool touched_limit = false;
     if (cmd.hardStop) {
-        robot_.stopMotion();
+        const DemoState s = sm_.state();
+        if (s == DemoState::Fault) {
+            if (!fault_emergency_issued_) {
+                robot_.emergencyStop();
+                fault_emergency_issued_ = true;
+            } else {
+                robot_.stopMotion();
+            }
+        } else {
+            robot_.stopMotion();
+            fault_emergency_issued_ = false;
+        }
     } else {
         std::array<double, 6> twist = {
             cmd.linear_velocity[0],  cmd.linear_velocity[1],  cmd.linear_velocity[2],
@@ -130,6 +151,7 @@ void Application::tick(double now_s) {
             touched_limit = guard_.clamp(pose, twist, loopPeriod());
         }
         robot_.sendCartesianVelocity(twist);
+        fault_emergency_issued_ = false;
     }
 
     if (cmd.openGripper)  gripper_.open();
