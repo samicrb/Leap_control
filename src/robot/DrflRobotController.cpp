@@ -218,12 +218,21 @@ bool DrflRobotController::engage() {
     //    joint torques against an inverse-dynamics prediction. If the
     //    payload / TCP declared on the controller doesn't match the
     //    actual mount, even gentle motion produces "unexpected" torques
-    //    and trips a SAFE_OFF mid-trajectory - the exact symptom we hit.
-    //    Override here so bring-up isn't blocked. 0 == disabled.
+    //    and trips a SAFE_OFF mid-trajectory. Override here so bring-up
+    //    isn't blocked. 0 == disabled.
     p_->drfl.set_collision_sensitivity(
         static_cast<unsigned int>(cfg_.collision_sensitivity));
     LOG_I("Collision sensitivity set to %d (0 = disabled).",
           cfg_.collision_sensitivity);
+
+    // 9. Singularity handling. Default is MANUAL (1) which stops the
+    //    motion on entering a singular region - that's what trips
+    //    alarm 3205 followed by SAFE_OFF (7056) on the safe-pose movel.
+    //    Mode 2 (AUTO) makes the controller blend through automatically.
+    p_->drfl.set_singular_handling(
+        static_cast<unsigned int>(cfg_.singularity_handling));
+    LOG_I("Singularity handling set to %d (0=NONE, 1=MANUAL, 2=AUTO).",
+          cfg_.singularity_handling);
 #endif
     engaged_.store(true);
     LOG_I("Robot engaged (authority + servo ON + STANDBY + safety=AUTONOMOUS).");
@@ -250,28 +259,44 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
 
 #if defined(HAVE_DRFL) && HAVE_DRFL
     if (g_access_grant.load() != 1) {
-        last_error_ = "DRFL movel(home): no access control authority";
+        last_error_ = "DRFL move(home): no access control authority";
         LOG_E("%s (grant=%d, state=%d)",
               last_error_.c_str(), g_access_grant.load(), g_robot_state.load());
         return false;
     }
-    // DRFL: planned movel to the safe pose. Profile is intentionally very
-    // gentle so the controller's joint-speed / collision supervisions are
-    // unlikely to trip on the initial approach. If a SAFE_STOP still fires
-    // at these speeds, the cause is not velocity-related (workspace zone,
-    // collision sensitivity, singularity) - set robot.skip_move_home=true
-    // and inspect the pendant.
+    // Profile is intentionally very gentle so the joint-speed / collision
+    // supervisions are unlikely to trip on the initial approach.
     float target[6] = { (float)safe.x, (float)safe.y, (float)safe.z,
                         (float)safe.rx, (float)safe.ry, (float)safe.rz };
-    float vel[2]   = { 20.0f, 5.0f };    // mm/s, deg/s
-    float accel[2] = { 50.0f, 20.0f };
-    // MOVE_REFERENCE_BASE, blocking.
-    if (!p_->drfl.movel(target, vel, accel, 0.0f, MOVE_MODE_ABSOLUTE,
-                        MOVE_REFERENCE_BASE, 0.0f, BLENDING_SPEED_TYPE_DUPLICATE)) {
-        last_error_ = "DRFL movel(home) failed (state="
-                    + std::to_string(g_robot_state.load()) + ")";
-        LOG_E("%s", last_error_.c_str());
-        return false;
+
+    if (cfg_.home_use_movejx) {
+        // movejx: joint-space interpolation to a Cartesian target.
+        // Immune to Cartesian path singularities (which trip alarm 3205
+        // -> SAFE_OFF 7056 on movel for poses like Ry=96 deg). Velocity
+        // / accel here are in JOINT units (deg/s, deg/s^2).
+        float jvel   = 20.0f;   // deg/s
+        float jaccel = 60.0f;   // deg/s^2
+        // sol_space 0 -> let DRFL pick a configuration close to current.
+        if (!p_->drfl.movejx(target, jvel, jaccel, 0.0f, MOVE_MODE_ABSOLUTE,
+                             MOVE_REFERENCE_BASE,
+                             BLENDING_SPEED_TYPE_DUPLICATE, 0)) {
+            last_error_ = "DRFL movejx(home) failed (state="
+                        + std::to_string(g_robot_state.load()) + ")";
+            LOG_E("%s", last_error_.c_str());
+            return false;
+        }
+    } else {
+        // Cartesian linear approach. Sensitive to wrist singularities.
+        float vel[2]   = { 20.0f, 5.0f };    // mm/s, deg/s
+        float accel[2] = { 50.0f, 20.0f };
+        if (!p_->drfl.movel(target, vel, accel, 0.0f, MOVE_MODE_ABSOLUTE,
+                            MOVE_REFERENCE_BASE, 0.0f,
+                            BLENDING_SPEED_TYPE_DUPLICATE)) {
+            last_error_ = "DRFL movel(home) failed (state="
+                        + std::to_string(g_robot_state.load()) + ")";
+            LOG_E("%s", last_error_.c_str());
+            return false;
+        }
     }
 #else
     // Simulator.

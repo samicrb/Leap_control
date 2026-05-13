@@ -74,6 +74,8 @@ bool loadConfig(const std::string& path, Config& c) {
     c.connect_timeout_s  = dGet("robot.connect_timeout_s", c.connect_timeout_s);
     c.skip_move_home     = bGet("robot.skip_move_home", c.skip_move_home);
     c.collision_sensitivity = iGet("robot.collision_sensitivity", c.collision_sensitivity);
+    c.singularity_handling  = iGet("robot.singularity_handling",  c.singularity_handling);
+    c.home_use_movejx       = bGet("robot.home_use_movejx",       c.home_use_movejx);
 
     c.loop_rate_hz   = iGet("loop.rate_hz", c.loop_rate_hz);
     c.max_lin_speed  = dGet("robot.max_lin_speed", c.max_lin_speed);
