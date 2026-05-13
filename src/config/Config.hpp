@@ -19,6 +19,12 @@ struct Config {
     // collision check: the demo then keeps whatever pose the robot is
     // already in and runs gestures from there.
     bool        skip_move_home = false;
+    // Collision detection sensitivity (0..100). 0 disables collision
+    // detection entirely - the only reliable bring-up value when the
+    // controller-side payload / TCP info isn't known yet and gentle
+    // motions keep tripping a phantom collision SAFE_STOP. Re-enable
+    // (50-75) once payload and TCP are configured for production.
+    int         collision_sensitivity = 0;
 
     // --- loop ---
     int    loop_rate_hz    = 60;

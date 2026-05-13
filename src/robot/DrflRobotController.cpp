@@ -212,6 +212,18 @@ bool DrflRobotController::engage() {
         LOG_E("%s", last_error_.c_str());
         return false;
     }
+
+    // 8. Collision-detection sensitivity. The Doosan A-series cobots ship
+    //    with collision detection on by default; it compares measured
+    //    joint torques against an inverse-dynamics prediction. If the
+    //    payload / TCP declared on the controller doesn't match the
+    //    actual mount, even gentle motion produces "unexpected" torques
+    //    and trips a SAFE_OFF mid-trajectory - the exact symptom we hit.
+    //    Override here so bring-up isn't blocked. 0 == disabled.
+    p_->drfl.set_collision_sensitivity(
+        static_cast<unsigned int>(cfg_.collision_sensitivity));
+    LOG_I("Collision sensitivity set to %d (0 = disabled).",
+          cfg_.collision_sensitivity);
 #endif
     engaged_.store(true);
     LOG_I("Robot engaged (authority + servo ON + STANDBY + safety=AUTONOMOUS).");
