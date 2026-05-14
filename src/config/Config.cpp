@@ -20,7 +20,8 @@ std::string trim(const std::string& s) {
 
 bool parseBool(const std::string& v, bool fallback) {
     std::string t = v;
-    std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+    std::transform(t.begin(), t.end(), t.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (t == "true" || t == "1" || t == "yes" || t == "on")  return true;
     if (t == "false" || t == "0" || t == "no" || t == "off") return false;
     return fallback;

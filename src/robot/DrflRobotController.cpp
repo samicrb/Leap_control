@@ -106,6 +106,23 @@ struct DrflRobotController::Impl {
 #endif
 };
 
+#if defined(HAVE_DRFL) && HAVE_DRFL && defined(DGD_DRFL_ENABLE_RT_API)
+static bool callSpeedlRt(CDRFLEx& drfl, const std::array<double, 6>& twist,
+                         const Config& cfg) {
+    float vel[6] = {(float)twist[0], (float)twist[1], (float)twist[2],
+                    (float)twist[3], (float)twist[4], (float)twist[5]};
+    float acc[2] = {(float)cfg.max_lin_accel, (float)cfg.max_ang_accel};
+#if defined(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME)
+    return drfl.speedl_rt(vel, acc, static_cast<float>(cfg.rt_command_timeout_s));
+#elif defined(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
+    return drfl.speedl_rt(vel, acc);
+#else
+    (void)drfl; (void)vel; (void)acc; (void)cfg;
+    return false;
+#endif
+}
+#endif
+
 DrflRobotController::DrflRobotController(const Config& cfg)
     : cfg_(cfg), p_(std::make_unique<Impl>()) {
     current_pose_ = { cfg.safe_x, cfg.safe_y, cfg.safe_z,
@@ -474,6 +491,10 @@ bool DrflRobotController::startRtControl() {
     if (rt_active_.load()) return true;
 #if defined(HAVE_DRFL) && HAVE_DRFL
 #if defined(DGD_DRFL_ENABLE_RT_API)
+#if !defined(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME) && !defined(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
+    LOG_W("RT enabled but no speedl_rt signature macro set. Define DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME or DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC.");
+    return true;
+#endif
     if (!p_->drfl.start_rt_control()) {
         last_error_ = "start_rt_control failed";
         LOG_E("%s", last_error_.c_str());
@@ -521,9 +542,11 @@ bool DrflRobotController::sendRtVelocity(const std::array<double, 6>& twist) {
         return true;
     }
 #if defined(HAVE_DRFL) && HAVE_DRFL && defined(DGD_DRFL_ENABLE_RT_API)
-    float vel[6] = {(float)twist[0], (float)twist[1], (float)twist[2],
-                    (float)twist[3], (float)twist[4], (float)twist[5]};
-    return p_->drfl.speedl_rt(vel, static_cast<float>(cfg_.rt_command_timeout_s));
+    if (!callSpeedlRt(p_->drfl, twist, cfg_)) {
+        last_error_ = "speedl_rt failed";
+        return false;
+    }
+    return true;
 #else
     return true;
 #endif
@@ -539,9 +562,7 @@ void DrflRobotController::rtLoop() {
             cmd = rt_cmd_;
         }
 #if defined(HAVE_DRFL) && HAVE_DRFL && defined(DGD_DRFL_ENABLE_RT_API)
-        float vel[6] = {(float)cmd[0], (float)cmd[1], (float)cmd[2],
-                        (float)cmd[3], (float)cmd[4], (float)cmd[5]};
-        if (!p_->drfl.speedl_rt(vel, static_cast<float>(cfg_.rt_command_timeout_s))) {
+        if (!callSpeedlRt(p_->drfl, cmd, cfg_)) {
             LOG_E("speedl_rt failed in RT thread.");
         }
 #endif
