@@ -18,7 +18,7 @@ struct Config {
     // safe pose triggers a SAFE_STOP from a controller-side safety zone /
     // collision check: the demo then keeps whatever pose the robot is
     // already in and runs gestures from there.
-    bool        skip_move_home = false;
+    bool        skip_move_home = true;
     // Collision detection sensitivity (0..100). 0 disables collision
     // detection entirely - the only reliable bring-up value when the
     // controller-side payload / TCP info isn't known yet and gentle
@@ -52,11 +52,11 @@ struct Config {
     // --- loop ---
     // Bring-up defaults: low speeds / accels so any safety trip is on
     // geometry rather than dynamics. See docs/TUNING_GUIDE.md.
-    int    loop_rate_hz    = 60;
-    double max_lin_speed   = 30.0;
-    double max_ang_speed   = 5.0;
-    double max_lin_accel   = 100.0;
-    double max_ang_accel   = 20.0;
+    int    loop_rate_hz    = 40;
+    double max_lin_speed   = 10.0;
+    double max_ang_speed   = 0.0;
+    double max_lin_accel   = 30.0;
+    double max_ang_accel   = 0.0;
 
     // --- workspace envelope (mm, deg) ---
     // When ws_enabled = false the box and orientation cone are NOT enforced
@@ -85,11 +85,11 @@ struct Config {
 
     // --- motion mapping ---
     // Bring-up defaults: tune up once stability is confirmed.
-    double position_scale    = 0.2;
-    double orientation_scale = 0.1;
+    double position_scale    = 0.03;
+    double orientation_scale = 0.0;
     double position_deadzone_mm = 2.5;
     double orientation_deadzone_deg = 2.0;
-    double smoothing_alpha   = 0.25;
+    double smoothing_alpha   = 0.5;
     int    sign_x = 1, sign_y = 1, sign_z = 1;
     int    sign_rx = 1, sign_ry = 1, sign_rz = 1;
 
