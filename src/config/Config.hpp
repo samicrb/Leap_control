@@ -50,13 +50,14 @@ struct Config {
     bool        auto_reset_safety = true;
 
     // --- loop ---
-    // Bring-up defaults: low speeds / accels so any safety trip is on
-    // geometry rather than dynamics. See docs/TUNING_GUIDE.md.
+    // Bring-up defaults: very low speeds / accels so the joint-level
+    // safety supervisor cannot trip on dynamics (alarm 5.7056). Decel
+    // ramp + envelope still apply on top.
     int    loop_rate_hz    = 60;
-    double max_lin_speed   = 30.0;
-    double max_ang_speed   = 5.0;
-    double max_lin_accel   = 100.0;
-    double max_ang_accel   = 20.0;
+    double max_lin_speed   = 15.0;
+    double max_ang_speed   = 2.0;
+    double max_lin_accel   = 50.0;
+    double max_ang_accel   = 10.0;
 
     // --- workspace envelope (mm, deg) ---
     // When ws_enabled = false the box and orientation cone are NOT enforced
@@ -84,9 +85,10 @@ struct Config {
     double posture_hold_s        = 0.10;
 
     // --- motion mapping ---
-    // Bring-up defaults: tune up once stability is confirmed.
-    double position_scale    = 0.2;
-    double orientation_scale = 0.1;
+    // Bring-up defaults: very small. Tune up once decel ramp + alarm
+    // budget are confirmed stable.
+    double position_scale    = 0.05;
+    double orientation_scale = 0.03;
     double position_deadzone_mm = 2.5;
     double orientation_deadzone_deg = 2.0;
     double smoothing_alpha   = 0.25;

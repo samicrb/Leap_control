@@ -260,12 +260,13 @@ void Application::tick(double now_s) {
 
     // 5. UI refresh.
     //    Pose lookup is gated: NEVER while the streaming pipe is hot
-    //    (PositionControl / OrientationControl) - that would interleave
-    //    a non-motion DRFL command with the speedl stream and trip
-    //    5.7056. Outside streaming, refresh at most every 0.5 s to keep
-    //    the read load down.
+    //    (PositionControl / OrientationControl OR an active decel ramp)
+    //    - that would interleave a non-motion DRFL command with the
+    //    speedl stream and trip 5.7056. Outside streaming, refresh at
+    //    most every 0.5 s to keep the read load down.
+    const bool streaming = cur_active || decel_active_;
     constexpr double kUiPosePollPeriod_s = 0.5;
-    if (!cur_active && (now_s - last_pose_poll_s_) > kUiPosePollPeriod_s) {
+    if (!streaming && (now_s - last_pose_poll_s_) > kUiPosePollPeriod_s) {
         RobotPose fresh_pose;
         if (robot_.getCurrentPose(fresh_pose)) {
             last_pose_for_ui_ = fresh_pose;
