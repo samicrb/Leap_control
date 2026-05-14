@@ -105,11 +105,12 @@ int Application::run() {
     }
 
     LOG_I("Application: exiting main loop.");
-    // Shutdown path: one explicit hard halt before disengage(). The
-    // adapter's disengage() also calls emergencyStop() as a safety net
-    // (it's idempotent), but stating intent here is clearer.
-    robot_.emergencyStop();
-    robot_.disengage();
+    // Normal shutdown path: just disconnect. The adapter's disconnect()
+    // chains to disengage() -> stopMotion() (soft speedl-zero) and then
+    // close_connection() which frees DRFL access authority cleanly. We
+    // deliberately do NOT call emergencyStop() here - normal shutdown is
+    // not a critical fault and STOP_TYPE_QUICK can drop the servo to
+    // SAFE_OFF, which then masks itself as a mastering loss next run.
     robot_.disconnect();
     gripper_.disconnect();
     sensor_.stop();

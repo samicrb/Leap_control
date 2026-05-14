@@ -275,18 +275,16 @@ bool DrflRobotController::engage() {
 
 void DrflRobotController::disengage() {
     if (!engaged_.load()) return;
-    // Shutdown path: a true halt is appropriate here. Application::run()
-    // typically calls emergencyStop() already, so this is the last-chance
-    // safety net (e.g. destructor / abnormal exit paths).
-    emergencyStop();
+    // Normal cleanup path: soft stop only. Do NOT call emergencyStop()
+    // here - shutdown / disconnect is not a critical fault and
+    // STOP_TYPE_QUICK in this path is what was dropping the servo to
+    // SAFE_OFF (then surfacing as a phantom "mastering lost" next run).
+    stopMotion();
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    // Note: DRFL 1.33.x does not consistently expose a RELEASE enumerant
-    // on MANAGE_ACCESS_CONTROL. close_connection() (invoked from
-    // disconnect()) already frees the authority when the socket drops, so
-    // an explicit release call is not required for a clean shutdown.
+    // Authority release is handled by close_connection() in disconnect().
 #endif
     engaged_.store(false);
-    LOG_I("Robot disengaged (motion halted, authority will release on disconnect).");
+    LOG_I("Robot disengaged (soft stop, authority will release on disconnect).");
 }
 
 bool DrflRobotController::moveHome(const RobotPose& safe) {
