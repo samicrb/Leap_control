@@ -491,6 +491,7 @@ bool DrflRobotController::sendCartesianMicroMove(const RobotPose& target,
 
 #if !defined(HAVE_DRFL) || !HAVE_DRFL
     (void)lin_vel; (void)ang_vel; (void)lin_acc; (void)ang_acc;
+    (void)blend_radius_mm; (void)blend_type;
     return true;
 #else
     // amovel: ASYNC, NON-BLOCKING movel. Signature (DRFL 1.33.3):
@@ -501,8 +502,11 @@ bool DrflRobotController::sendCartesianMicroMove(const RobotPose& target,
     //          BLENDING_SPEED_TYPE eBlendingType = DUPLICATE,
     //          DR_MV_APP eAppType = DR_MV_APP_NONE)
     //
-    // No blending RADIUS parameter on amovel - blending behaviour is
-    // controlled solely by BLENDING_SPEED_TYPE. DUPLICATE preserves the
+    // DRFL amovel has no radius parameter in this SDK version.
+    // We therefore gate blending through BLENDING_SPEED_TYPE only:
+    //   - radius_cfg <= 0  => OVERRIDE (no chaining)
+    //   - radius_cfg > 0   => DUPLICATE/OVERRIDE per blend_type
+    // radius_cfg is retained as operator-facing safety toggle in config.
     // velocity at segment boundaries which, combined with our scheduler
     // (200 ms between commands, ~167 ms per motion), means each amovel
     // completes before the next is issued -> no actual blending.
@@ -513,19 +517,24 @@ bool DrflRobotController::sendCartesianMicroMove(const RobotPose& target,
                       (float)target.rx, (float)target.ry, (float)target.rz };
     float vel[2]  = { (float)lin_vel, (float)ang_vel };
     float acc[2]  = { (float)lin_acc, (float)ang_acc };
-    const float radius = (blend_radius_mm > 0.0) ? static_cast<float>(blend_radius_mm) : 0.0f;
-    auto blend_enum = BLENDING_SPEED_TYPE_DUPLICATE;
-    if (blend_type == "override") blend_enum = BLENDING_SPEED_TYPE_OVERRIDE;
+    const bool blending_enabled = blend_radius_mm > 0.0;
+    auto blend_enum = BLENDING_SPEED_TYPE_OVERRIDE;
+    if (blending_enabled) {
+        blend_enum = (blend_type == "override") ? BLENDING_SPEED_TYPE_OVERRIDE
+                                                : BLENDING_SPEED_TYPE_DUPLICATE;
+    }
 
     if (!micro_blending_logged_) {
-        LOG_I("Micro-motion blending: enabled=%s radius=%.2fmm type=%s", radius > 0.0f ? "true" : "false", radius, blend_type.c_str());
+        LOG_I("Micro-motion blending: enabled=%s radius_cfg=%.2fmm type=%s",
+              blending_enabled ? "true" : "false", blend_radius_mm, blend_type.c_str());
         micro_blending_logged_ = true;
     }
-    if (radius > 0.0f) {
-        LOG_D("Sending blended micro-move (radius=%.2fmm, type=%s)", radius, blend_type.c_str());
+    if (blending_enabled) {
+        LOG_D("Sending chained micro-move (amovel blend_type=%s, radius_cfg=%.2fmm)",
+              blend_type.c_str(), blend_radius_mm);
     }
 
-    if (!p_->drfl.amovel(pose, vel, acc, 0.0f, MOVE_MODE_ABSOLUTE, MOVE_REFERENCE_BASE, radius, blend_enum)) {
+    if (!p_->drfl.amovel(pose, vel, acc, 0.0f, MOVE_MODE_ABSOLUTE, MOVE_REFERENCE_BASE, blend_enum)) {
         last_error_ = "DRFL amovel(micro) failed";
         return false;
     }

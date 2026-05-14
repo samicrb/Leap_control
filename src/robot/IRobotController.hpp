@@ -41,9 +41,9 @@ public:
     // Must not throw.
     virtual void stopMotion() = 0;
 
-    // Discrete, NON-BLOCKING, NON-BLENDED Cartesian micro-motion to a
-    // target pose. The adapter MUST use amovel(...) with radius=0 (or an
-    // equivalent non-blending overload) and MUST NOT call mwait().
+    // Discrete, NON-BLOCKING Cartesian micro-motion to a target pose.
+    // Adapter MUST use amovel(...) and MUST NOT call mwait(). Blending
+    // can be enabled only for active micro-motion chaining.
     //
     // This is the only motion primitive the Application's active loop is
     // allowed to use during PositionControl / OrientationControl. The
