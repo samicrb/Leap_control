@@ -49,4 +49,13 @@ bool WorkspaceGuard::clamp(const RobotPose& p, std::array<double, 6>& t, double 
     return touched;
 }
 
+void WorkspaceGuard::clampSpeed(std::array<double, 6>& t) const {
+    t[0] = ::dgd::clamp(t[0], -cfg_.max_lin_speed, cfg_.max_lin_speed);
+    t[1] = ::dgd::clamp(t[1], -cfg_.max_lin_speed, cfg_.max_lin_speed);
+    t[2] = ::dgd::clamp(t[2], -cfg_.max_lin_speed, cfg_.max_lin_speed);
+    t[3] = ::dgd::clamp(t[3], -cfg_.max_ang_speed, cfg_.max_ang_speed);
+    t[4] = ::dgd::clamp(t[4], -cfg_.max_ang_speed, cfg_.max_ang_speed);
+    t[5] = ::dgd::clamp(t[5], -cfg_.max_ang_speed, cfg_.max_ang_speed);
+}
+
 } // namespace dgd

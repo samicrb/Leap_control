@@ -171,22 +171,27 @@ void Application::tick(double now_s) {
         robot_.emergencyStop();
         fault_emergency_issued_ = true;
     } else if (cur_active) {
-        // Streaming control. The adapter applies a velocity deadband and
-        // skips speedl() when the commanded twist is effectively zero, so
-        // this call is safe at the loop rate even when the operator's
-        // hand is momentarily still.
+        // Streaming control.
+        //
+        // CRITICAL: the ONLY DRFL call we make in this branch is
+        // sendCartesianVelocity() (-> speedl). No getCurrentPose, no
+        // stopMotion, no robot-mode change. Interleaving any non-motion
+        // DRFL command between two speedl() calls (notably
+        // CONTROL_CHECK_CURRENT_TASK_POSITION emitted by
+        // getCurrentPose) reliably trips alarm 5.7056 "Standstill
+        // status violated". The workspace guard's pose-based clamp is
+        // skipped for the same reason; we apply only the hard speed/
+        // accel caps via clampSpeed() which does not need a pose.
         if (!prev_active) {
-            LOG_I("State %s -> %s : entering active control.",
+            LOG_I("State %s -> %s : entering active streaming "
+                  "(getCurrentPose suppressed).",
                   stateName(prev_state_), stateName(cur_state));
         }
         std::array<double, 6> twist = {
             cmd.linear_velocity[0],  cmd.linear_velocity[1],  cmd.linear_velocity[2],
             cmd.angular_velocity[0], cmd.angular_velocity[1], cmd.angular_velocity[2]
         };
-        RobotPose pose;
-        if (robot_.getCurrentPose(pose)) {
-            touched_limit = guard_.clamp(pose, twist, loopPeriod());
-        }
+        guard_.clampSpeed(twist);          // no pose required
         robot_.sendCartesianVelocity(twist);
         fault_emergency_issued_ = false;
     } else if (prev_active) {
@@ -209,8 +214,19 @@ void Application::tick(double now_s) {
     if (cmd.closeGripper) gripper_.close();
 
     // 5. UI refresh.
-    RobotPose pose_now;
-    robot_.getCurrentPose(pose_now);
+    //    Pose lookup is gated: NEVER while the streaming pipe is hot
+    //    (PositionControl / OrientationControl) - that would interleave
+    //    a non-motion DRFL command with the speedl stream and trip
+    //    5.7056. Outside streaming, refresh at most every 0.5 s to keep
+    //    the read load down.
+    constexpr double kUiPosePollPeriod_s = 0.5;
+    if (!cur_active && (now_s - last_pose_poll_s_) > kUiPosePollPeriod_s) {
+        RobotPose fresh_pose;
+        if (robot_.getCurrentPose(fresh_pose)) {
+            last_pose_for_ui_ = fresh_pose;
+            last_pose_poll_s_ = now_s;
+        }
+    }
 
     ConsoleUI::Frame uiframe;
     uiframe.state         = sm_.state();
@@ -221,7 +237,7 @@ void Application::tick(double now_s) {
     uiframe.status_text   = cmd.ui_status_text;
     uiframe.prompt_text   = cmd.ui_prompt_text;
     uiframe.gesture       = report;
-    uiframe.pose          = pose_now;
+    uiframe.pose          = last_pose_for_ui_;   // cached - never refetched while active
     uiframe.gripper       = gripper_.lastCommandedState();
     uiframe.workspace_limit = touched_limit;
     ui_.render(uiframe);

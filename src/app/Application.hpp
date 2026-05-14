@@ -61,6 +61,15 @@ private:
     // a stable passive state - this is what was leading to alarm 5.7056
     // "Standstill status violated").
     DemoState          prev_state_ = DemoState::Idle;
+    // UI pose cache. We MUST NOT call robot_.getCurrentPose() during
+    // active streaming (PositionControl / OrientationControl) - that
+    // call resolves to a non-motion DRFL command
+    // (CONTROL_CHECK_CURRENT_TASK_POSITION) and interleaving it with
+    // speedl() reliably trips alarm 5.7056. Instead we cache the pose
+    // and refresh it at low frequency only while the streaming pipe
+    // is quiet.
+    RobotPose          last_pose_for_ui_{};
+    double             last_pose_poll_s_ = 0.0;
 };
 
 } // namespace dgd
