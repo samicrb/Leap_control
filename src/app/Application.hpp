@@ -11,6 +11,7 @@
 #include "ui/ConsoleUI.hpp"
 
 #include <atomic>
+#include <array>
 #include <memory>
 
 namespace dgd {
@@ -70,6 +71,11 @@ private:
     // is quiet.
     RobotPose          last_pose_for_ui_{};
     double             last_pose_poll_s_ = 0.0;
+    bool               decel_active_ = false;
+    int                decel_step_ = 0;
+    std::array<double, 6> decel_start_twist_{0, 0, 0, 0, 0, 0};
+    std::array<double, 6> last_active_twist_{0, 0, 0, 0, 0, 0};
+    DemoState          pending_passive_state_ = DemoState::Idle;
 };
 
 } // namespace dgd

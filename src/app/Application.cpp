@@ -2,6 +2,7 @@
 #include "input/KeyboardButton.hpp"
 #include "util/Logger.hpp"
 
+#include <cmath>
 #include <chrono>
 #include <thread>
 
@@ -40,6 +41,14 @@ bool isCriticalFault(FaultReason r) {
 bool isActiveState(DemoState s) {
     return s == DemoState::PositionControl ||
            s == DemoState::OrientationControl;
+}
+
+bool isZeroTwist(const std::array<double, 6>& twist) {
+    constexpr double kEps = 1e-9;
+    for (double v : twist) {
+        if (std::abs(v) > kEps) return false;
+    }
+    return true;
 }
 } // namespace
 
@@ -164,12 +173,43 @@ void Application::tick(double now_s) {
 
     bool touched_limit = false;
 
+    if (decel_active_ && cur_active) {
+        LOG_I("State %s -> %s : deceleration canceled (active streaming resumed).",
+              stateName(prev_state_), stateName(cur_state));
+        decel_active_ = false;
+        decel_step_ = 0;
+    }
+
     if (critical && !fault_emergency_issued_) {
         // One-shot hard halt on entering a critical fault.
         LOG_W("CRITICAL fault (%s) - emergencyStop issued.",
               faultReasonText(fault_now));
         robot_.emergencyStop();
         fault_emergency_issued_ = true;
+    } else if (decel_active_) {
+        static constexpr double kDecelFactors[] = {0.75, 0.55, 0.40, 0.25, 0.12, 0.0};
+        const int max_steps = static_cast<int>(sizeof(kDecelFactors) / sizeof(kDecelFactors[0]));
+        const int idx = (decel_step_ < max_steps) ? decel_step_ : (max_steps - 1);
+        const double k = kDecelFactors[idx];
+
+        std::array<double, 6> twist = {
+            decel_start_twist_[0] * k, decel_start_twist_[1] * k, decel_start_twist_[2] * k,
+            decel_start_twist_[3] * k, decel_start_twist_[4] * k, decel_start_twist_[5] * k
+        };
+        guard_.clampSpeed(twist);
+        LOG_D("Deceleration step %d/%d (k=%.2f).", idx + 1, max_steps, k);
+        robot_.sendCartesianVelocity(twist);
+        ++decel_step_;
+        fault_emergency_issued_ = false;
+
+        if (decel_step_ >= max_steps) {
+            decel_active_ = false;
+            decel_step_ = 0;
+            last_active_twist_ = {0, 0, 0, 0, 0, 0};
+            decel_start_twist_ = {0, 0, 0, 0, 0, 0};
+            LOG_I("Deceleration completed; entering passive state %s.",
+                  stateName(pending_passive_state_));
+        }
     } else if (cur_active) {
         // Streaming control.
         //
@@ -192,14 +232,19 @@ void Application::tick(double now_s) {
             cmd.angular_velocity[0], cmd.angular_velocity[1], cmd.angular_velocity[2]
         };
         guard_.clampSpeed(twist);          // no pose required
+        if (!isZeroTwist(twist)) {
+            last_active_twist_ = twist;
+        }
         robot_.sendCartesianVelocity(twist);
         fault_emergency_issued_ = false;
     } else if (prev_active) {
-        // Falling edge active -> passive. Single soft stop to decelerate
-        // cleanly; subsequent passive ticks send nothing.
-        LOG_I("State %s -> %s : soft stop sent.",
+        // Falling edge active -> passive.
+        decel_active_ = true;
+        decel_step_ = 0;
+        decel_start_twist_ = last_active_twist_;
+        pending_passive_state_ = cur_state;
+        LOG_I("State %s -> %s : starting deceleration ramp.",
               stateName(prev_state_), stateName(cur_state));
-        robot_.stopMotion();
         fault_emergency_issued_ = false;
     } else {
         // Passive -> passive (stable). Do NOT touch the robot.
