@@ -55,6 +55,12 @@ private:
     // Latches whether we already fired the one-shot emergencyStop() for
     // the current Fault entry. Reset whenever we leave the Fault state.
     bool               fault_emergency_issued_ = false;
+    // Previous tick's DemoState; used to detect active->passive and
+    // passive->active transitions so we only send stopMotion() once on
+    // the falling edge (never at the 60 Hz loop rate while sitting in
+    // a stable passive state - this is what was leading to alarm 5.7056
+    // "Standstill status violated").
+    DemoState          prev_state_ = DemoState::Idle;
 };
 
 } // namespace dgd

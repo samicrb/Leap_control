@@ -33,6 +33,14 @@ bool isCriticalFault(FaultReason r) {
     }
     return false;
 }
+
+// "Active" states stream velocity commands at the loop rate. Every
+// other state is passive (no velocity stream) - we only need to issue
+// a soft stop on the falling edge active -> passive.
+bool isActiveState(DemoState s) {
+    return s == DemoState::PositionControl ||
+           s == DemoState::OrientationControl;
+}
 } // namespace
 
 Application::Application(const Config& cfg,
@@ -141,34 +149,36 @@ void Application::tick(double now_s) {
     if (cmd.captureReference) interpreter_.captureReference();
 
     // 4. Execute commands.
-    //    cmd.hardStop is set by the state machine in every non-streaming
-    //    state (IDLE, READY, RECENTER, GRIPPER, FAULT). For passive
-    //    states we only need a SOFT pause - the controller decelerates
-    //    via a zero speedl and holds position; this is safe to call at
-    //    60 Hz.
-    //
-    //    The hard STOP_TYPE_QUICK path is reserved for genuinely
-    //    critical runtime faults (robot error, internal fault); operator
-    //    or sensor faults (hand lost, sensor not ready, workspace edge)
-    //    use the soft pause. The emergency stop fires once on entering
-    //    the critical state and is debounced via fault_emergency_issued_.
+    //    Transition-driven design: we only send robot commands on the
+    //    state edges (active <-> passive) and during active streaming.
+    //    Sitting in a stable passive state (IDLE / READY / RECENTER /
+    //    GRIPPER / non-critical FAULT) sends NOTHING - which avoids the
+    //    repeated speedl(0) / stopMotion() at 60 Hz that was tripping
+    //    Doosan alarm 5.7056 "Standstill status is violated".
+    const DemoState  cur_state    = sm_.state();
+    const FaultReason fault_now   = sm_.faultReason();
+    const bool        cur_active  = isActiveState(cur_state);
+    const bool        prev_active = isActiveState(prev_state_);
+    const bool        critical    = (cur_state == DemoState::Fault) &&
+                                    isCriticalFault(fault_now);
+
     bool touched_limit = false;
-    if (cmd.hardStop) {
-        const bool critical =
-            sm_.state() == DemoState::Fault &&
-            isCriticalFault(sm_.faultReason());
-        if (critical) {
-            if (!fault_emergency_issued_) {
-                robot_.emergencyStop();
-                fault_emergency_issued_ = true;
-            } else {
-                robot_.stopMotion();
-            }
-        } else {
-            robot_.stopMotion();
-            fault_emergency_issued_ = false;
+
+    if (critical && !fault_emergency_issued_) {
+        // One-shot hard halt on entering a critical fault.
+        LOG_W("CRITICAL fault (%s) - emergencyStop issued.",
+              faultReasonText(fault_now));
+        robot_.emergencyStop();
+        fault_emergency_issued_ = true;
+    } else if (cur_active) {
+        // Streaming control. The adapter applies a velocity deadband and
+        // skips speedl() when the commanded twist is effectively zero, so
+        // this call is safe at the loop rate even when the operator's
+        // hand is momentarily still.
+        if (!prev_active) {
+            LOG_I("State %s -> %s : entering active control.",
+                  stateName(prev_state_), stateName(cur_state));
         }
-    } else {
         std::array<double, 6> twist = {
             cmd.linear_velocity[0],  cmd.linear_velocity[1],  cmd.linear_velocity[2],
             cmd.angular_velocity[0], cmd.angular_velocity[1], cmd.angular_velocity[2]
@@ -179,7 +189,21 @@ void Application::tick(double now_s) {
         }
         robot_.sendCartesianVelocity(twist);
         fault_emergency_issued_ = false;
+    } else if (prev_active) {
+        // Falling edge active -> passive. Single soft stop to decelerate
+        // cleanly; subsequent passive ticks send nothing.
+        LOG_I("State %s -> %s : soft stop sent.",
+              stateName(prev_state_), stateName(cur_state));
+        robot_.stopMotion();
+        fault_emergency_issued_ = false;
+    } else {
+        // Passive -> passive (stable). Do NOT touch the robot.
+        // (Critical-fault re-ticks also fall here once
+        // fault_emergency_issued_ has latched.)
+        fault_emergency_issued_ = critical ? fault_emergency_issued_ : false;
     }
+
+    prev_state_ = cur_state;
 
     if (cmd.openGripper)  gripper_.open();
     if (cmd.closeGripper) gripper_.close();

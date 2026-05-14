@@ -50,11 +50,13 @@ struct Config {
     bool        auto_reset_safety = true;
 
     // --- loop ---
+    // Bring-up defaults: low speeds / accels so any safety trip is on
+    // geometry rather than dynamics. See docs/TUNING_GUIDE.md.
     int    loop_rate_hz    = 60;
-    double max_lin_speed   = 120.0;
-    double max_ang_speed   = 25.0;
-    double max_lin_accel   = 400.0;
-    double max_ang_accel   = 120.0;
+    double max_lin_speed   = 30.0;
+    double max_ang_speed   = 5.0;
+    double max_lin_accel   = 100.0;
+    double max_ang_accel   = 20.0;
 
     // --- workspace envelope (mm, deg) ---
     // When ws_enabled = false the box and orientation cone are NOT enforced
@@ -82,8 +84,9 @@ struct Config {
     double posture_hold_s        = 0.10;
 
     // --- motion mapping ---
-    double position_scale    = 0.8;
-    double orientation_scale = 0.6;
+    // Bring-up defaults: tune up once stability is confirmed.
+    double position_scale    = 0.2;
+    double orientation_scale = 0.1;
     double position_deadzone_mm = 2.5;
     double orientation_deadzone_deg = 2.0;
     double smoothing_alpha   = 0.25;

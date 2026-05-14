@@ -263,10 +263,10 @@ bool DrflRobotController::engage() {
     //    makes the controller blend through automatically; VEL (2)
     //    reduces velocity in the region.
     //    Doosan SINGULARITY_AVOIDANCE enum: AVOID=0, STOP=1, VEL=2.
-    p_->drfl.set_singularity_handling(
+    const bool sing_ok = p_->drfl.set_singularity_handling(
         static_cast<SINGULARITY_AVOIDANCE>(cfg_.singularity_handling));
-    LOG_I("Singularity handling set to %d (0=AVOID, 1=STOP, 2=VEL).",
-          cfg_.singularity_handling);
+    LOG_I("Singularity handling set to %d (0=AVOID, 1=STOP, 2=VEL) ok=%d.",
+          cfg_.singularity_handling, sing_ok ? 1 : 0);
 #endif
     engaged_.store(true);
     LOG_I("Robot engaged (authority + servo ON + STANDBY + safety=AUTONOMOUS).");
@@ -308,24 +308,24 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
     float target[6] = { (float)safe.x, (float)safe.y, (float)safe.z,
                         (float)safe.rx, (float)safe.ry, (float)safe.rz };
 
+    // IMPORTANT: do NOT add an mwait() after this move - mwait() after a
+    // blended motion can trip Doosan alarm 5.7056 "Standstill status
+    // violated". We also avoid setting a blending radius (radius=0)
+    // and a blending type beyond the SDK default for the same reason:
+    // a blended move followed by any non-motion command on 1.33.3 is
+    // a known foot-gun. To wait for completion we poll the monitoring
+    // state until STATE_STANDBY.
     if (cfg_.home_use_movejx) {
         // movejx: joint-space interpolation to a Cartesian target.
         // Immune to Cartesian path singularities (which trip alarm 3205
         // -> SAFE_OFF 7056 on movel for poses like Ry=96 deg).
-        // Signature (DRFL 1.33.3):
-        //   movejx(float target[6], unsigned char iSolutionSpace,
-        //          float fTargetVel, float fTargetAcc,
-        //          float fTargetTime = 0, MOVE_MODE = ABSOLUTE,
-        //          MOVE_REFERENCE = BASE, float fBlendingRadius = 0,
-        //          BLENDING_SPEED_TYPE = DUPLICATE)
-        // iSolutionSpace=0 -> let DRFL pick a configuration close to
-        // current. vel/acc are JOINT units (deg/s, deg/s^2).
+        // Use the short overload form: only fTargetVel / fTargetAcc;
+        // the SDK fills the rest with safe defaults (ABSOLUTE, BASE,
+        // radius=0, default blending type).
         const unsigned char sol_space = 0;
         const float jvel   = 20.0f;  // deg/s
         const float jaccel = 60.0f;  // deg/s^2
-        if (!p_->drfl.movejx(target, sol_space, jvel, jaccel, 0.0f,
-                             MOVE_MODE_ABSOLUTE, MOVE_REFERENCE_BASE,
-                             0.0f, BLENDING_SPEED_TYPE_DUPLICATE)) {
+        if (!p_->drfl.movejx(target, sol_space, jvel, jaccel)) {
             last_error_ = "DRFL movejx(home) failed (state="
                         + std::to_string(g_robot_state.load()) + ")";
             LOG_E("%s", last_error_.c_str());
@@ -333,17 +333,29 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
         }
     } else {
         // Cartesian linear approach. Sensitive to wrist singularities.
+        // Short overload form, no blending.
         float vel[2]   = { 20.0f, 5.0f };    // mm/s, deg/s
         float accel[2] = { 50.0f, 20.0f };
-        if (!p_->drfl.movel(target, vel, accel, 0.0f, MOVE_MODE_ABSOLUTE,
-                            MOVE_REFERENCE_BASE, 0.0f,
-                            BLENDING_SPEED_TYPE_DUPLICATE)) {
+        if (!p_->drfl.movel(target, vel, accel)) {
             last_error_ = "DRFL movel(home) failed (state="
                         + std::to_string(g_robot_state.load()) + ")";
             LOG_E("%s", last_error_.c_str());
             return false;
         }
     }
+
+    // Wait for STATE_STANDBY rather than mwait(). Polling the
+    // monitoring state lets us return only once the controller has
+    // fully settled, without ever issuing a non-motion DRFL call while
+    // the joints might still be stabilising.
+    if (!waitFor([] {
+            return g_robot_state.load() == static_cast<int>(STATE_STANDBY);
+        }, 30.0)) {
+        LOG_W("moveHome: STANDBY not reached after motion (state=%d).",
+              g_robot_state.load());
+    }
+    // The robot is at zero velocity now; next active tick will refresh.
+    last_was_zero_ = true;
 #else
     // Simulator.
     std::lock_guard<std::mutex> lock(pose_mx_);
@@ -376,50 +388,85 @@ bool DrflRobotController::sendCartesianVelocity(const std::array<double, 6>& twi
         return true;
     }
 
+    // Deadband: residual EMA / sensor jitter routinely produces sub-mm/s
+    // twists when the hand is held still. Treat anything below the
+    // thresholds as zero and emit ONE speedl(0) on the falling edge,
+    // then go quiet. Without this we spam speedl() at 60 Hz with tiny
+    // non-zero values, which is one of the conditions that trip alarm
+    // 5.7056 "Standstill status violated" on Doosan 1.33.3.
+    constexpr double kLinDeadband_mm_s  = 0.5;
+    constexpr double kAngDeadband_deg_s = 0.5;
+    const bool below_lin = std::abs(twist[0]) < kLinDeadband_mm_s &&
+                           std::abs(twist[1]) < kLinDeadband_mm_s &&
+                           std::abs(twist[2]) < kLinDeadband_mm_s;
+    const bool below_ang = std::abs(twist[3]) < kAngDeadband_deg_s &&
+                           std::abs(twist[4]) < kAngDeadband_deg_s &&
+                           std::abs(twist[5]) < kAngDeadband_deg_s;
+
 #if defined(HAVE_DRFL) && HAVE_DRFL
-    // DRFL: speedl streams an instantaneous Cartesian velocity.
-    // Argument: {vx, vy, vz, wx, wy, wz}, accel cap, duration.
+    float accel[2] = { (float)cfg_.max_lin_accel, (float)cfg_.max_ang_accel };
+    // Duration tuned slightly larger than the 60 Hz loop period so that
+    // a single lost packet doesn't desync the streaming watchdog.
+    constexpr float kSpeedlDuration_s = 0.2f;
+
+    if (below_lin && below_ang) {
+        if (!last_was_zero_) {
+            float vel[6] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+            p_->drfl.speedl(vel, accel, kSpeedlDuration_s);
+            last_was_zero_ = true;
+        }
+        return true;
+    }
+
+    last_was_zero_ = false;
     float vel[6] = { (float)twist[0], (float)twist[1], (float)twist[2],
                      (float)twist[3], (float)twist[4], (float)twist[5] };
-    float accel[2] = { (float)cfg_.max_lin_accel, (float)cfg_.max_ang_accel };
-    if (!p_->drfl.speedl(vel, accel, 0.1f)) {
+    if (!p_->drfl.speedl(vel, accel, kSpeedlDuration_s)) {
         last_error_ = "DRFL speedl failed";
         return false;
     }
+#else
+    (void)below_lin; (void)below_ang;
 #endif
     return true;
 }
 
 void DrflRobotController::stopMotion() {
-    // SOFT pause: stream zero Cartesian velocity. The controller
-    // decelerates the TCP to a stand-still and holds position. Safe to
-    // call at 60 Hz from passive states (IDLE / READY / RECENTER /
-    // GRIPPER) - issuing STOP_TYPE_QUICK in that hot path is what was
-    // tripping the SAFE_OFF transitions previously observed.
+    // SOFT pause: stream a single zero Cartesian velocity and then go
+    // quiet. The caller (Application::tick) only invokes us on the
+    // falling-edge active -> passive transition, NEVER in a 60 Hz loop -
+    // sustained speedl(0) spam was contributing to alarm 5.7056.
     {
         std::lock_guard<std::mutex> lock(pose_mx_);
         last_twist_ = {0, 0, 0, 0, 0, 0};
     }
-    if (cfg_.dryrun_robot) return;
+    if (last_was_zero_) return;          // already at rest, do nothing
+    if (cfg_.dryrun_robot) {
+        last_was_zero_ = true;
+        return;
+    }
 #if defined(HAVE_DRFL) && HAVE_DRFL
     if (connected_.load() && engaged_.load()) {
         float vel[6] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
         float accel[2] = { (float)cfg_.max_lin_accel,
                            (float)cfg_.max_ang_accel };
-        p_->drfl.speedl(vel, accel, 0.1f);
+        p_->drfl.speedl(vel, accel, 0.2f);
     }
 #endif
+    last_was_zero_ = true;
+    LOG_I("Robot: soft stop (speedl zero) issued.");
 }
 
 void DrflRobotController::emergencyStop() {
-    // HARD halt for true faults / shutdown. STOP_TYPE_QUICK can
-    // transition the controller to SAFE_OFF on some configurations, so
-    // restrict this to genuine emergencies, never call it on a 60 Hz
-    // loop.
+    // HARD halt for true faults only. STOP_TYPE_QUICK can drop the
+    // servo to SAFE_OFF on some configurations, so restrict this to
+    // genuine emergencies - never call it on the 60 Hz loop and never
+    // on a clean shutdown path.
     {
         std::lock_guard<std::mutex> lock(pose_mx_);
         last_twist_ = {0, 0, 0, 0, 0, 0};
     }
+    last_was_zero_ = true;
     if (cfg_.dryrun_robot) return;
 #if defined(HAVE_DRFL) && HAVE_DRFL
     if (connected_.load() && engaged_.load()) {
