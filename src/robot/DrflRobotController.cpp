@@ -27,6 +27,7 @@
 #include "util/Logger.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -52,6 +53,14 @@ double nowSeconds() {
     using clock = std::chrono::steady_clock;
     static const auto t0 = clock::now();
     return std::chrono::duration<double>(clock::now() - t0).count();
+}
+
+bool isZeroTwist(const std::array<double, 6>& twist) {
+    constexpr double kEps = 1e-9;
+    for (double v : twist) {
+        if (std::abs(v) > kEps) return false;
+    }
+    return true;
 }
 
 #if defined(HAVE_DRFL) && HAVE_DRFL
@@ -489,11 +498,19 @@ void DrflRobotController::stopMotion() {
 
 bool DrflRobotController::startRtControl() {
     if (rt_active_.load()) return true;
+    LOG_I("RT config: enabled=%d use_thread=%d frequency_hz=%d",
+          cfg_.rt_enabled ? 1 : 0, cfg_.rt_use_thread ? 1 : 0, cfg_.rt_frequency_hz);
 #if defined(HAVE_DRFL) && HAVE_DRFL
 #if defined(DGD_DRFL_ENABLE_RT_API)
 #if !defined(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME) && !defined(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
-    LOG_W("RT enabled but no speedl_rt signature macro set. Define DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME or DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC.");
-    return true;
+    last_error_ = "RT requested but speedl_rt is not compiled in.";
+    LOG_E("%s", last_error_.c_str());
+    return false;
+#endif
+#if defined(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME)
+    LOG_I("RT speedl_rt signature: VEL_ACC_TIME");
+#elif defined(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
+    LOG_I("RT speedl_rt signature: VEL_ACC");
 #endif
     if (!p_->drfl.start_rt_control()) {
         last_error_ = "start_rt_control failed";
@@ -508,7 +525,9 @@ bool DrflRobotController::startRtControl() {
         LOG_I("RT command thread started at %d Hz.", cfg_.rt_frequency_hz);
     }
 #else
-    LOG_W("rt.enabled=true but DRFL RT API is not enabled in this build. Falling back to standard speedl.");
+    last_error_ = "RT requested but speedl_rt is not compiled in.";
+    LOG_E("%s", last_error_.c_str());
+    return false;
 #endif
 #endif
     return true;
@@ -536,6 +555,14 @@ bool DrflRobotController::stopRtControl() {
 
 bool DrflRobotController::sendRtVelocity(const std::array<double, 6>& twist) {
     if (!rt_active_.load()) return true;
+    if (!isZeroTwist(twist)) {
+        const uint64_t count = rt_nonzero_count_.fetch_add(1) + 1;
+        if (count == 1 || (count % 120) == 0) {
+            LOG_I("RT non-zero command received (count=%llu): [%.3f %.3f %.3f %.3f %.3f %.3f]",
+                  static_cast<unsigned long long>(count),
+                  twist[0], twist[1], twist[2], twist[3], twist[4], twist[5]);
+        }
+    }
     if (cfg_.rt_use_thread) {
         std::lock_guard<std::mutex> lock(rt_cmd_mx_);
         rt_cmd_ = twist;
@@ -544,7 +571,12 @@ bool DrflRobotController::sendRtVelocity(const std::array<double, 6>& twist) {
 #if defined(HAVE_DRFL) && HAVE_DRFL && defined(DGD_DRFL_ENABLE_RT_API)
     if (!callSpeedlRt(p_->drfl, twist, cfg_)) {
         last_error_ = "speedl_rt failed";
+        LOG_E("RT send failed: speedl_rt returned false.");
+        rt_error_seen_.store(true);
         return false;
+    }
+    if (!isZeroTwist(twist)) {
+        rt_nonzero_sent_count_.fetch_add(1);
     }
     return true;
 #else
@@ -562,8 +594,14 @@ void DrflRobotController::rtLoop() {
             cmd = rt_cmd_;
         }
 #if defined(HAVE_DRFL) && HAVE_DRFL && defined(DGD_DRFL_ENABLE_RT_API)
+        if (!rt_nonzero_logged_.load() && !isZeroTwist(cmd)) {
+            rt_nonzero_logged_.store(true);
+            LOG_I("RT loop first non-zero command send: [%.3f %.3f %.3f %.3f %.3f %.3f]",
+                  cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5]);
+        }
         if (!callSpeedlRt(p_->drfl, cmd, cfg_)) {
             LOG_E("speedl_rt failed in RT thread.");
+            rt_error_seen_.store(true);
         }
 #endif
         std::this_thread::sleep_for(period);

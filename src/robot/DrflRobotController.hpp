@@ -67,6 +67,10 @@ private:
     std::thread rt_thread_;
     mutable std::mutex rt_cmd_mx_;
     std::array<double, 6> rt_cmd_{0,0,0,0,0,0};
+    std::atomic<bool> rt_error_seen_{false};
+    std::atomic<bool> rt_nonzero_logged_{false};
+    std::atomic<uint64_t> rt_nonzero_count_{0};
+    std::atomic<uint64_t> rt_nonzero_sent_count_{0};
 
     bool startRtControl();
     bool stopRtControl();

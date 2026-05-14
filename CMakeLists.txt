@@ -31,6 +31,21 @@ option(DGD_DRFL_ENABLE_RT_API "Enable DRFL RT API calls (start_rt_control/speedl
 option(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME "speedl_rt signature: (vel[6], acc[2], time_s)." OFF)
 option(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC "speedl_rt signature: (vel[6], acc[2])." OFF)
 
+if(DGD_DRFL_ENABLE_RT_API
+   AND NOT DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME
+   AND NOT DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
+    message(STATUS "No speedl_rt signature selected; defaulting to VEL_ACC_TIME (DRFL 1.33.x).")
+    set(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME ON CACHE BOOL "" FORCE)
+endif()
+
+if(DGD_DRFL_ENABLE_RT_API
+   AND DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME
+   AND DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
+    message(FATAL_ERROR
+        "Both DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME and DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC are ON. "
+        "Select exactly one speedl_rt signature.")
+endif()
+
 set(HAVE_LEAPC FALSE)
 if(LEAPC_SDK_ROOT AND EXISTS "${LEAPC_SDK_ROOT}/include/LeapC.h")
     set(HAVE_LEAPC TRUE)
