@@ -121,6 +121,24 @@ struct Config {
     // --- dry-run flags ---
     bool dryrun_robot   = false;
     bool dryrun_gripper = false;
+
+    // --- micro-motion supervisor (replaces continuous speedl streaming) ---
+    // The active control loop now schedules SHORT, NON-BLENDED amovel
+    // commands at micro_command_rate_hz instead of streaming speedl()
+    // every tick. This removes the failure mode where alarm 5.7056
+    // (OPERATION_SAFETY_FUNCTION_SOS_VIOLATION) was tripped by the
+    // joint-accel supervisor on a continuous velocity profile.
+    double micro_command_rate_hz       = 5.0;    // robot command issue rate
+    double micro_min_period_s          = 0.20;   // hard lower bound between commands
+    double micro_max_delta_xyz_mm      = 5.0;    // per-command position step cap
+    double micro_max_delta_rot_deg     = 1.5;    // per-command orientation step cap
+    double micro_deadband_mm           = 0.3;    // skip command if delta below
+    double micro_deadband_deg          = 0.2;
+    // amovel motion profile (radius=0 always, no blending).
+    double micro_lin_vel               = 30.0;   // mm/s
+    double micro_ang_vel               = 10.0;   // deg/s
+    double micro_lin_acc               = 100.0;  // mm/s^2
+    double micro_ang_acc               = 30.0;   // deg/s^2
 };
 
 // Loads config from disk. Missing keys keep their defaults. Returns true

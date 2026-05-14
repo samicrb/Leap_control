@@ -475,6 +475,43 @@ void DrflRobotController::emergencyStop() {
 #endif
 }
 
+bool DrflRobotController::sendCartesianMicroMove(const RobotPose& target,
+                                                 double lin_vel, double ang_vel,
+                                                 double lin_acc, double ang_acc) {
+    if (!connected_.load() || !engaged_.load()) return false;
+
+    {
+        // Keep the simulator pose in sync for UI / dryrun.
+        std::lock_guard<std::mutex> lock(pose_mx_);
+        current_pose_ = target;
+    }
+    if (cfg_.dryrun_robot) return true;
+
+#if !defined(HAVE_DRFL) || !HAVE_DRFL
+    (void)lin_vel; (void)ang_vel; (void)lin_acc; (void)ang_acc;
+    return true;
+#else
+    // amovel: ASYNC, NON-BLOCKING movel. Radius=0 disables blending; the
+    // controller decelerates to a complete stop at the end of each
+    // segment. The Application scheduler caps the issue rate (5 Hz) and
+    // bounds the per-command delta so each amovel completes well before
+    // the next is issued. We MUST NOT call mwait() here - mwait() after
+    // any movel-family call is a documented trigger for alarm 5.7056.
+    float pose[6] = { (float)target.x,  (float)target.y,  (float)target.z,
+                      (float)target.rx, (float)target.ry, (float)target.rz };
+    float vel[2]  = { (float)lin_vel, (float)ang_vel };
+    float acc[2]  = { (float)lin_acc, (float)ang_acc };
+    if (!p_->drfl.amovel(pose, vel, acc, 0.0f, MOVE_MODE_ABSOLUTE,
+                         MOVE_REFERENCE_BASE, 0.0f,
+                         BLENDING_SPEED_TYPE_DUPLICATE)) {
+        last_error_ = "DRFL amovel(micro) failed";
+        return false;
+    }
+    last_was_zero_ = false;
+#endif
+    return true;
+}
+
 bool DrflRobotController::getCurrentPose(RobotPose& out) {
     if (!connected_.load()) return false;
 #if defined(HAVE_DRFL) && HAVE_DRFL

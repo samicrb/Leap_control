@@ -43,13 +43,6 @@ bool isActiveState(DemoState s) {
            s == DemoState::OrientationControl;
 }
 
-bool isZeroTwist(const std::array<double, 6>& twist) {
-    constexpr double kEps = 1e-9;
-    for (double v : twist) {
-        if (std::abs(v) > kEps) return false;
-    }
-    return true;
-}
 } // namespace
 
 Application::Application(const Config& cfg,
@@ -173,83 +166,132 @@ void Application::tick(double now_s) {
 
     bool touched_limit = false;
 
-    if (decel_active_ && cur_active) {
-        LOG_I("State %s -> %s : deceleration canceled (active streaming resumed).",
-              stateName(prev_state_), stateName(cur_state));
-        decel_active_ = false;
-        decel_step_ = 0;
-    }
-
     if (critical && !fault_emergency_issued_) {
-        // One-shot hard halt on entering a critical fault.
+        // One-shot hard halt on entering a critical fault. Drops any
+        // pending micro-motion plan; an in-flight amovel will be
+        // overridden by the controller-level stop().
         LOG_W("CRITICAL fault (%s) - emergencyStop issued.",
               faultReasonText(fault_now));
         robot_.emergencyStop();
         fault_emergency_issued_ = true;
-    } else if (decel_active_) {
-        static constexpr double kDecelFactors[] = {0.75, 0.55, 0.40, 0.25, 0.12, 0.0};
-        const int max_steps = static_cast<int>(sizeof(kDecelFactors) / sizeof(kDecelFactors[0]));
-        const int idx = (decel_step_ < max_steps) ? decel_step_ : (max_steps - 1);
-        const double k = kDecelFactors[idx];
-
-        std::array<double, 6> twist = {
-            decel_start_twist_[0] * k, decel_start_twist_[1] * k, decel_start_twist_[2] * k,
-            decel_start_twist_[3] * k, decel_start_twist_[4] * k, decel_start_twist_[5] * k
-        };
-        guard_.clampSpeed(twist);
-        LOG_D("Deceleration step %d/%d (k=%.2f).", idx + 1, max_steps, k);
-        robot_.sendCartesianVelocity(twist);
-        ++decel_step_;
-        fault_emergency_issued_ = false;
-
-        if (decel_step_ >= max_steps) {
-            decel_active_ = false;
-            decel_step_ = 0;
-            last_active_twist_ = {0, 0, 0, 0, 0, 0};
-            decel_start_twist_ = {0, 0, 0, 0, 0, 0};
-            LOG_I("Deceleration completed; entering passive state %s.",
-                  stateName(pending_passive_state_));
-        }
+        virtual_target_initialised_ = false;
     } else if (cur_active) {
-        // Streaming control.
+        // Active control via the MICRO-MOTION SUPERVISOR.
         //
-        // CRITICAL: the ONLY DRFL call we make in this branch is
-        // sendCartesianVelocity() (-> speedl). No getCurrentPose, no
-        // stopMotion, no robot-mode change. Interleaving any non-motion
-        // DRFL command between two speedl() calls (notably
-        // CONTROL_CHECK_CURRENT_TASK_POSITION emitted by
-        // getCurrentPose) reliably trips alarm 5.7056 "Standstill
-        // status violated". The workspace guard's pose-based clamp is
-        // skipped for the same reason; we apply only the hard speed/
-        // accel caps via clampSpeed() which does not need a pose.
+        // We do NOT stream speedl() any more. Continuous velocity
+        // profiles were tripping the joint-accel safety supervisor
+        // (alarm 5.7056). Instead we maintain a virtual target pose,
+        // accumulate hand-driven deltas into it, and issue at most
+        // ~5 Hz a SHORT, NON-BLENDED amovel toward the new target.
+        //
+        // The ONLY DRFL command we issue in this branch is the amovel
+        // call, and only when the scheduler permits. No getCurrentPose
+        // (except a single seed read on entry), no stopMotion, no
+        // robot-mode change.
         if (!prev_active) {
-            LOG_I("State %s -> %s : entering active streaming "
-                  "(getCurrentPose suppressed).",
-                  stateName(prev_state_), stateName(cur_state));
+            // Seed the virtual target from the real TCP pose. This is
+            // the ONE getCurrentPose() permitted in the active path; it
+            // happens once, before any micro-motion is queued, so it
+            // cannot interleave with an in-flight amovel.
+            RobotPose seed;
+            if (robot_.getCurrentPose(seed)) {
+                virtual_target_pose_       = seed;
+                virtual_target_initialised_ = true;
+                last_command_sent_s_       = now_s - cfg_.micro_min_period_s;
+                LOG_I("State %s -> %s : entering MICRO-MOTION mode "
+                      "(virtual target seeded from real pose).",
+                      stateName(prev_state_), stateName(cur_state));
+            } else {
+                virtual_target_initialised_ = false;
+                LOG_W("State %s -> %s : entering MICRO-MOTION mode but "
+                      "could not seed virtual target (getCurrentPose failed).",
+                      stateName(prev_state_), stateName(cur_state));
+            }
         }
-        std::array<double, 6> twist = {
-            cmd.linear_velocity[0],  cmd.linear_velocity[1],  cmd.linear_velocity[2],
-            cmd.angular_velocity[0], cmd.angular_velocity[1], cmd.angular_velocity[2]
-        };
-        guard_.clampSpeed(twist);          // no pose required
-        if (!isZeroTwist(twist)) {
-            last_active_twist_ = twist;
+        if (virtual_target_initialised_) {
+            // Scheduler: throttle to micro_command_rate_hz.
+            const double elapsed = now_s - last_command_sent_s_;
+            const double period_floor =
+                std::max(cfg_.micro_min_period_s,
+                         1.0 / std::max(cfg_.micro_command_rate_hz, 0.1));
+            if (elapsed < period_floor) {
+                // Too soon since last amovel - skip silently. No log:
+                // this happens on every tick between commands.
+            } else {
+                // Integrate gesture velocity over the elapsed window
+                // into a per-command delta, then bound it.
+                std::array<double, 6> twist = {
+                    cmd.linear_velocity[0],  cmd.linear_velocity[1],  cmd.linear_velocity[2],
+                    cmd.angular_velocity[0], cmd.angular_velocity[1], cmd.angular_velocity[2]
+                };
+                guard_.clampSpeed(twist);    // hard caps, no pose
+
+                auto bound = [](double v, double m) {
+                    if (v >  m) return  m;
+                    if (v < -m) return -m;
+                    return v;
+                };
+                double dx  = bound(twist[0] * elapsed, cfg_.micro_max_delta_xyz_mm);
+                double dy  = bound(twist[1] * elapsed, cfg_.micro_max_delta_xyz_mm);
+                double dz  = bound(twist[2] * elapsed, cfg_.micro_max_delta_xyz_mm);
+                double drx = bound(twist[3] * elapsed, cfg_.micro_max_delta_rot_deg);
+                double dry = bound(twist[4] * elapsed, cfg_.micro_max_delta_rot_deg);
+                double drz = bound(twist[5] * elapsed, cfg_.micro_max_delta_rot_deg);
+
+                const bool meaningful =
+                    std::abs(dx)  > cfg_.micro_deadband_mm  ||
+                    std::abs(dy)  > cfg_.micro_deadband_mm  ||
+                    std::abs(dz)  > cfg_.micro_deadband_mm  ||
+                    std::abs(drx) > cfg_.micro_deadband_deg ||
+                    std::abs(dry) > cfg_.micro_deadband_deg ||
+                    std::abs(drz) > cfg_.micro_deadband_deg;
+
+                if (!meaningful) {
+                    // Hand essentially still. Hold the virtual target;
+                    // do not issue a command. (Don't update
+                    // last_command_sent_s_ either, so the next non-
+                    // trivial gesture can fire immediately.)
+                } else {
+                    virtual_target_pose_.x  += dx;
+                    virtual_target_pose_.y  += dy;
+                    virtual_target_pose_.z  += dz;
+                    virtual_target_pose_.rx += drx;
+                    virtual_target_pose_.ry += dry;
+                    virtual_target_pose_.rz += drz;
+
+                    if (robot_.sendCartesianMicroMove(
+                            virtual_target_pose_,
+                            cfg_.micro_lin_vel, cfg_.micro_ang_vel,
+                            cfg_.micro_lin_acc, cfg_.micro_ang_acc)) {
+                        last_command_sent_s_ = now_s;
+                        LOG_I("Micro-move accepted: dXYZ=[%.2f %.2f %.2f] "
+                              "dRot=[%.2f %.2f %.2f] target=[%.1f %.1f %.1f / "
+                              "%.1f %.1f %.1f].",
+                              dx, dy, dz, drx, dry, drz,
+                              virtual_target_pose_.x, virtual_target_pose_.y,
+                              virtual_target_pose_.z, virtual_target_pose_.rx,
+                              virtual_target_pose_.ry, virtual_target_pose_.rz);
+                    } else {
+                        LOG_W("Micro-move refused by adapter: %s",
+                              robot_.lastError().c_str());
+                    }
+                }
+            }
         }
-        robot_.sendCartesianVelocity(twist);
         fault_emergency_issued_ = false;
     } else if (prev_active) {
-        // Falling edge active -> passive.
-        decel_active_ = true;
-        decel_step_ = 0;
-        decel_start_twist_ = last_active_twist_;
-        pending_passive_state_ = cur_state;
-        LOG_I("State %s -> %s : starting deceleration ramp.",
+        // Falling edge active -> passive. Per the supervisor design we
+        // simply STOP issuing new amovels. The last in-flight short
+        // motion completes naturally (~100 ms) and the controller halts
+        // smoothly at its end pose. NO stopMotion(), NO speedl(0), NO
+        // emergencyStop, NO mwait.
+        LOG_I("State %s -> %s : ceasing micro-motion stream "
+              "(last in-flight amovel will run to completion).",
               stateName(prev_state_), stateName(cur_state));
-        fault_emergency_issued_ = false;
+        virtual_target_initialised_ = false;
+        fault_emergency_issued_     = false;
     } else {
         // Passive -> passive (stable). Do NOT touch the robot.
-        // (Critical-fault re-ticks also fall here once
-        // fault_emergency_issued_ has latched.)
         fault_emergency_issued_ = critical ? fault_emergency_issued_ : false;
     }
 
@@ -259,14 +301,12 @@ void Application::tick(double now_s) {
     if (cmd.closeGripper) gripper_.close();
 
     // 5. UI refresh.
-    //    Pose lookup is gated: NEVER while the streaming pipe is hot
-    //    (PositionControl / OrientationControl OR an active decel ramp)
-    //    - that would interleave a non-motion DRFL command with the
-    //    speedl stream and trip 5.7056. Outside streaming, refresh at
-    //    most every 0.5 s to keep the read load down.
-    const bool streaming = cur_active || decel_active_;
+    //    Pose lookup is gated: NEVER while the active micro-motion
+    //    pipeline is running (PositionControl / OrientationControl,
+    //    where amovel commands may be in flight). Outside streaming,
+    //    refresh at most every 0.5 s to keep the read load down.
     constexpr double kUiPosePollPeriod_s = 0.5;
-    if (!streaming && (now_s - last_pose_poll_s_) > kUiPosePollPeriod_s) {
+    if (!cur_active && (now_s - last_pose_poll_s_) > kUiPosePollPeriod_s) {
         RobotPose fresh_pose;
         if (robot_.getCurrentPose(fresh_pose)) {
             last_pose_for_ui_ = fresh_pose;

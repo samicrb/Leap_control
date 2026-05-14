@@ -71,11 +71,19 @@ private:
     // is quiet.
     RobotPose          last_pose_for_ui_{};
     double             last_pose_poll_s_ = 0.0;
-    bool               decel_active_ = false;
-    int                decel_step_ = 0;
-    std::array<double, 6> decel_start_twist_{0, 0, 0, 0, 0, 0};
-    std::array<double, 6> last_active_twist_{0, 0, 0, 0, 0, 0};
-    DemoState          pending_passive_state_ = DemoState::Idle;
+
+    // --- Micro-motion supervisor state ---
+    //
+    // Active control no longer streams speedl(). The Leap hand drives a
+    // virtual target pose; short non-blended amovel commands are issued
+    // toward it at a low rate (cfg_.micro_command_rate_hz, ~5 Hz). The
+    // virtual pose is seeded from the real TCP pose ONCE on entering
+    // active mode (the only getCurrentPose call allowed in the active
+    // path). After that the integrator runs purely off the gesture
+    // velocity stream, with per-command bounds and a deadband.
+    RobotPose             virtual_target_pose_{};
+    bool                  virtual_target_initialised_ = false;
+    double                last_command_sent_s_ = 0.0;
 };
 
 } // namespace dgd

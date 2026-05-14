@@ -41,6 +41,22 @@ public:
     // Must not throw.
     virtual void stopMotion() = 0;
 
+    // Discrete, NON-BLOCKING, NON-BLENDED Cartesian micro-motion to a
+    // target pose. The adapter MUST use amovel(...) with radius=0 (or an
+    // equivalent non-blending overload) and MUST NOT call mwait().
+    //
+    // This is the only motion primitive the Application's active loop is
+    // allowed to use during PositionControl / OrientationControl. The
+    // scheduler (Application) caps the issue rate (typically 5 Hz) and
+    // bounds the per-command delta so each motion completes well before
+    // the next is issued.
+    //
+    // vel/acc are scalar caps (mm/s, deg/s, mm/s^2, deg/s^2). Returns
+    // false if the command was refused / the link isn't ready.
+    virtual bool sendCartesianMicroMove(const RobotPose& target,
+                                        double lin_vel, double ang_vel,
+                                        double lin_acc, double ang_acc) = 0;
+
     // HARD halt. Issue a controller-level STOP_TYPE_QUICK. Reserved for
     // real faults and shutdown: this can drop the servo into SAFE_OFF
     // on some controllers, so do NOT call it from a streaming loop.

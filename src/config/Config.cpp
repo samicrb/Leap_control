@@ -142,6 +142,17 @@ bool loadConfig(const std::string& path, Config& c) {
     c.dryrun_robot   = bGet("dryrun.robot",   c.dryrun_robot);
     c.dryrun_gripper = bGet("dryrun.gripper", c.dryrun_gripper);
 
+    c.micro_command_rate_hz   = dGet("robot.micro_command_rate_hz",   c.micro_command_rate_hz);
+    c.micro_min_period_s      = dGet("robot.micro_min_period_s",      c.micro_min_period_s);
+    c.micro_max_delta_xyz_mm  = dGet("robot.micro_max_delta_xyz_mm",  c.micro_max_delta_xyz_mm);
+    c.micro_max_delta_rot_deg = dGet("robot.micro_max_delta_rot_deg", c.micro_max_delta_rot_deg);
+    c.micro_deadband_mm       = dGet("robot.micro_deadband_mm",       c.micro_deadband_mm);
+    c.micro_deadband_deg      = dGet("robot.micro_deadband_deg",      c.micro_deadband_deg);
+    c.micro_lin_vel           = dGet("robot.micro_lin_vel",           c.micro_lin_vel);
+    c.micro_ang_vel           = dGet("robot.micro_ang_vel",           c.micro_ang_vel);
+    c.micro_lin_acc           = dGet("robot.micro_lin_acc",           c.micro_lin_acc);
+    c.micro_ang_acc           = dGet("robot.micro_ang_acc",           c.micro_ang_acc);
+
     LOG_I("Config loaded from %s (%zu keys)", path.c_str(), kv.size());
     return true;
 }
