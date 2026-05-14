@@ -10,9 +10,9 @@ namespace dgd {
 
 struct Config {
     // --- robot ---
-    std::string robot_ip       = "192.168.1.2";
+    std::string robot_ip       = "192.168.1.25";
     int         robot_port     = 12345;
-    std::string robot_model    = "A0509";
+    std::string robot_model    = "M1013";
     double      connect_timeout_s = 5.0;
     // Skip the blocking movel-to-safe-pose at startup. Useful when the
     // safe pose triggers a SAFE_STOP from a controller-side safety zone /

@@ -491,19 +491,27 @@ bool DrflRobotController::sendCartesianMicroMove(const RobotPose& target,
     (void)lin_vel; (void)ang_vel; (void)lin_acc; (void)ang_acc;
     return true;
 #else
-    // amovel: ASYNC, NON-BLOCKING movel. Radius=0 disables blending; the
-    // controller decelerates to a complete stop at the end of each
-    // segment. The Application scheduler caps the issue rate (5 Hz) and
-    // bounds the per-command delta so each amovel completes well before
-    // the next is issued. We MUST NOT call mwait() here - mwait() after
-    // any movel-family call is a documented trigger for alarm 5.7056.
+    // amovel: ASYNC, NON-BLOCKING movel. Signature (DRFL 1.33.3):
+    //   amovel(target[6], vel[2], acc[2],
+    //          time = 0,
+    //          MOVE_MODE eMoveMode = ABSOLUTE,
+    //          MOVE_REFERENCE eMoveReference = BASE,
+    //          BLENDING_SPEED_TYPE eBlendingType = DUPLICATE,
+    //          DR_MV_APP eAppType = DR_MV_APP_NONE)
+    //
+    // No blending RADIUS parameter on amovel - blending behaviour is
+    // controlled solely by BLENDING_SPEED_TYPE. DUPLICATE preserves the
+    // velocity at segment boundaries which, combined with our scheduler
+    // (200 ms between commands, ~167 ms per motion), means each amovel
+    // completes before the next is issued -> no actual blending.
+    //
+    // We MUST NOT call mwait() here - mwait() after any movel-family
+    // call is a documented trigger for alarm 5.7056.
     float pose[6] = { (float)target.x,  (float)target.y,  (float)target.z,
                       (float)target.rx, (float)target.ry, (float)target.rz };
     float vel[2]  = { (float)lin_vel, (float)ang_vel };
     float acc[2]  = { (float)lin_acc, (float)ang_acc };
-    if (!p_->drfl.amovel(pose, vel, acc, 0.0f, MOVE_MODE_ABSOLUTE,
-                         MOVE_REFERENCE_BASE, 0.0f,
-                         BLENDING_SPEED_TYPE_DUPLICATE)) {
+    if (!p_->drfl.amovel(pose, vel, acc)) {
         last_error_ = "DRFL amovel(micro) failed";
         return false;
     }

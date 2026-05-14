@@ -1,6 +1,6 @@
 # Doosan Open-House Gesture-Control Demo
 
-Gesture-driven teleoperation of a **Doosan A0509** (controller V3.5, DRFL 1.33.2)
+Gesture-driven teleoperation of a **Doosan M1013** (controller V3.5, DRFL 1.33.3)
 using an **Ultraleap Leap Motion Controller** with the **Gemini 6.2.0 / LeapC**
 tracking stack. Built for a public open-house event: robust, predictable,
 operator-friendly.
@@ -111,7 +111,7 @@ pressed **and** both hands are detected in the right posture.
 
 ## 5. Robot connection
 
-Defaults shipped: `robot.ip = 192.168.1.2`, `robot.model = A0509`, safe pose
+Defaults shipped: `robot.ip = 192.168.1.25`, `robot.model = M1013`, safe pose
 `x=55 y=400 z=375 rx=33 ry=96 rz=110` (mm/deg, BASE frame). Edit any of those
 plus `robot.port` in `config/demo_config.ini` if the cell differs. Keep
 `dryrun.robot = true` until you have walked the cell and confirmed nothing

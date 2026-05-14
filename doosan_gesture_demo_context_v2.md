@@ -42,11 +42,13 @@ There is **no requirement to display metrics** such as latency or update rate. T
 ## 3. Platform and Environment
 
 ### Robot
-- **Robot model:** Doosan **A0509** (previously planned: A0912 — narrowed to A0509 during bring-up)
+- **Robot model:** Doosan **M1013** (project history: A0912 -> A0509 -> M1013;
+  the platform was retargeted twice during bring-up. M-series has a longer
+  reach than the cobot A-series, behaviour is otherwise comparable.)
 - **Controller software:** **V3.5**
 - **Doosan robot API version to use:** **DRFL 1.33.3** (from
   [github.com/DoosanRobotics/API-DRFL](https://github.com/DoosanRobotics/API-DRFL))
-- **Robot IP / port:** `192.168.1.2` : `12345` (configurable in
+- **Robot IP / port:** `192.168.1.25` : `12345` (configurable in
   `config/demo_config.ini`)
 - **Safe pose (BASE frame, Doosan ZYZ' Euler):**
   `x=55, y=400, z=375, rx=33 (W), ry=96 (P), rz=110 (R)` in mm / deg.
@@ -753,7 +755,7 @@ For implementation decisions, prefer:
 
 ## 25. Final Instruction to the Code-Generation AI
 
-Build a **demo-grade, robust, operator-friendly gesture control application** for a **Doosan A0509 with V3.5 controller**, using a **Leap Motion Controller** and an **external Windows 11 PC**, with the following goals:
+Build a **demo-grade, robust, operator-friendly gesture control application** for a **Doosan M1013 with V3.5 controller**, using a **Leap Motion Controller** and an **external Windows 11 PC**, with the following goals:
 
 - make the robot feel reactive and intuitive
 - keep behavior safe and conservative
