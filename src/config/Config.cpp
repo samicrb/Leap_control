@@ -110,7 +110,7 @@ bool loadConfig(const std::string& path, Config& c) {
 
     c.position_scale    = dGet("motion.position_scale",    c.position_scale);
     c.orientation_scale = dGet("motion.orientation_scale", c.orientation_scale);
-    c.position_deadzone_mm = dGet("motion.position_deadzone_mm", c.position_deadzone_mm);
+    c.position_deadzone_mm = dGet("motion.position_deadzone_mm", dGet("motion.deadzone_mm", c.position_deadzone_mm));
     c.orientation_deadzone_deg = dGet("motion.orientation_deadzone_deg", c.orientation_deadzone_deg);
     c.smoothing_alpha  = dGet("motion.smoothing_alpha",   c.smoothing_alpha);
     c.sign_x  = iGet("motion.sign_x",  c.sign_x);
