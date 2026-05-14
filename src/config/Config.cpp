@@ -152,6 +152,9 @@ bool loadConfig(const std::string& path, Config& c) {
     c.micro_ang_vel           = dGet("robot.micro_ang_vel",           c.micro_ang_vel);
     c.micro_lin_acc           = dGet("robot.micro_lin_acc",           c.micro_lin_acc);
     c.micro_ang_acc           = dGet("robot.micro_ang_acc",           c.micro_ang_acc);
+    c.micro_blending_enabled = bGet("robot.micro_blending_enabled", c.micro_blending_enabled);
+    c.micro_blending_radius_mm = dGet("robot.micro_blending_radius_mm", c.micro_blending_radius_mm);
+    c.micro_blending_type = sGet("robot.micro_blending_type", c.micro_blending_type);
 
     LOG_I("Config loaded from %s (%zu keys)", path.c_str(), kv.size());
     return true;

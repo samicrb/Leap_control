@@ -259,12 +259,14 @@ void Application::tick(double now_s) {
                     virtual_target_pose_.ry += dry;
                     virtual_target_pose_.rz += drz;
 
+                    const double blend_radius_mm = cfg_.micro_blending_enabled ? cfg_.micro_blending_radius_mm : 0.0;
                     if (robot_.sendCartesianMicroMove(
                             virtual_target_pose_,
                             cfg_.micro_lin_vel, cfg_.micro_ang_vel,
-                            cfg_.micro_lin_acc, cfg_.micro_ang_acc)) {
+                            cfg_.micro_lin_acc, cfg_.micro_ang_acc,
+                            blend_radius_mm, cfg_.micro_blending_type)) {
                         last_command_sent_s_ = now_s;
-                        LOG_I("Micro-move accepted: dXYZ=[%.2f %.2f %.2f] "
+                        LOG_D("Micro-move accepted: dXYZ=[%.2f %.2f %.2f] "
                               "dRot=[%.2f %.2f %.2f] target=[%.1f %.1f %.1f / "
                               "%.1f %.1f %.1f].",
                               dx, dy, dz, drx, dry, drz,

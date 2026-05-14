@@ -477,7 +477,9 @@ void DrflRobotController::emergencyStop() {
 
 bool DrflRobotController::sendCartesianMicroMove(const RobotPose& target,
                                                  double lin_vel, double ang_vel,
-                                                 double lin_acc, double ang_acc) {
+                                                 double lin_acc, double ang_acc,
+                                                 double blend_radius_mm,
+                                                 const std::string& blend_type) {
     if (!connected_.load() || !engaged_.load()) return false;
 
     {
@@ -511,7 +513,19 @@ bool DrflRobotController::sendCartesianMicroMove(const RobotPose& target,
                       (float)target.rx, (float)target.ry, (float)target.rz };
     float vel[2]  = { (float)lin_vel, (float)ang_vel };
     float acc[2]  = { (float)lin_acc, (float)ang_acc };
-    if (!p_->drfl.amovel(pose, vel, acc)) {
+    const float radius = (blend_radius_mm > 0.0) ? static_cast<float>(blend_radius_mm) : 0.0f;
+    auto blend_enum = BLENDING_SPEED_TYPE_DUPLICATE;
+    if (blend_type == "override") blend_enum = BLENDING_SPEED_TYPE_OVERRIDE;
+
+    if (!micro_blending_logged_) {
+        LOG_I("Micro-motion blending: enabled=%s radius=%.2fmm type=%s", radius > 0.0f ? "true" : "false", radius, blend_type.c_str());
+        micro_blending_logged_ = true;
+    }
+    if (radius > 0.0f) {
+        LOG_D("Sending blended micro-move (radius=%.2fmm, type=%s)", radius, blend_type.c_str());
+    }
+
+    if (!p_->drfl.amovel(pose, vel, acc, 0.0f, MOVE_MODE_ABSOLUTE, MOVE_REFERENCE_BASE, radius, blend_enum)) {
         last_error_ = "DRFL amovel(micro) failed";
         return false;
     }

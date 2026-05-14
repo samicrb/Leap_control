@@ -55,7 +55,9 @@ public:
     // false if the command was refused / the link isn't ready.
     virtual bool sendCartesianMicroMove(const RobotPose& target,
                                         double lin_vel, double ang_vel,
-                                        double lin_acc, double ang_acc) = 0;
+                                        double lin_acc, double ang_acc,
+                                        double blend_radius_mm = 0.0,
+                                        const std::string& blend_type = "duplicate") = 0;
 
     // HARD halt. Issue a controller-level STOP_TYPE_QUICK. Reserved for
     // real faults and shutdown: this can drop the servo into SAFE_OFF

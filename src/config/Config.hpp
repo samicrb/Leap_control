@@ -54,10 +54,10 @@ struct Config {
     // safety supervisor cannot trip on dynamics (alarm 5.7056). Decel
     // ramp + envelope still apply on top.
     int    loop_rate_hz    = 60;
-    double max_lin_speed   = 15.0;
-    double max_ang_speed   = 2.0;
-    double max_lin_accel   = 50.0;
-    double max_ang_accel   = 10.0;
+    double max_lin_speed   = 120.0;
+    double max_ang_speed   = 25.0;
+    double max_lin_accel   = 450.0;
+    double max_ang_accel   = 120.0;
 
     // --- workspace envelope (mm, deg) ---
     // When ws_enabled = false the box and orientation cone are NOT enforced
@@ -87,11 +87,11 @@ struct Config {
     // --- motion mapping ---
     // Bring-up defaults: very small. Tune up once decel ramp + alarm
     // budget are confirmed stable.
-    double position_scale    = 0.05;
-    double orientation_scale = 0.03;
-    double position_deadzone_mm = 2.5;
+    double position_scale    = 0.32;
+    double orientation_scale = 0.16;
+    double position_deadzone_mm = 2.0;
     double orientation_deadzone_deg = 2.0;
-    double smoothing_alpha   = 0.25;
+    double smoothing_alpha   = 0.10;
     int    sign_x = 1, sign_y = 1, sign_z = 1;
     int    sign_rx = 1, sign_ry = 1, sign_rz = 1;
 
@@ -128,17 +128,21 @@ struct Config {
     // every tick. This removes the failure mode where alarm 5.7056
     // (OPERATION_SAFETY_FUNCTION_SOS_VIOLATION) was tripped by the
     // joint-accel supervisor on a continuous velocity profile.
-    double micro_command_rate_hz       = 5.0;    // robot command issue rate
-    double micro_min_period_s          = 0.20;   // hard lower bound between commands
-    double micro_max_delta_xyz_mm      = 5.0;    // per-command position step cap
-    double micro_max_delta_rot_deg     = 1.5;    // per-command orientation step cap
-    double micro_deadband_mm           = 0.3;    // skip command if delta below
-    double micro_deadband_deg          = 0.2;
-    // amovel motion profile (radius=0 always, no blending).
-    double micro_lin_vel               = 30.0;   // mm/s
-    double micro_ang_vel               = 10.0;   // deg/s
-    double micro_lin_acc               = 100.0;  // mm/s^2
-    double micro_ang_acc               = 30.0;   // deg/s^2
+    double micro_command_rate_hz       = 18.0;   // robot command issue rate
+    double micro_min_period_s          = 0.055;  // hard lower bound between commands
+    double micro_max_delta_xyz_mm      = 12.0;   // per-command position step cap
+    double micro_max_delta_rot_deg     = 3.0;    // per-command orientation step cap
+    double micro_deadband_mm           = 0.6;    // skip command if delta below
+    double micro_deadband_deg          = 0.3;
+    // amovel motion profile for active micro-motions.
+    double micro_lin_vel               = 160.0;  // mm/s
+    double micro_ang_vel               = 35.0;   // deg/s
+    double micro_lin_acc               = 450.0;  // mm/s^2
+    double micro_ang_acc               = 120.0;  // deg/s^2
+    // Optional blending for micro-motion chaining (active modes only).
+    bool        micro_blending_enabled   = true;
+    double      micro_blending_radius_mm = 4.0;
+    std::string micro_blending_type      = "duplicate";
 };
 
 // Loads config from disk. Missing keys keep their defaults. Returns true

@@ -40,7 +40,9 @@ public:
     void emergencyStop() override;
     bool sendCartesianMicroMove(const RobotPose& target,
                                 double lin_vel, double ang_vel,
-                                double lin_acc, double ang_acc) override;
+                                double lin_acc, double ang_acc,
+                                double blend_radius_mm = 0.0,
+                                const std::string& blend_type = "duplicate") override;
     bool getCurrentPose(RobotPose& out) override;
 
     std::string lastError() const override { return last_error_; }
@@ -64,6 +66,7 @@ private:
     // emit a single zero command on the falling edge (active->idle) and
     // then stay quiet, rather than spamming speedl(0) at 60 Hz.
     bool      last_was_zero_ = true;
+    bool      micro_blending_logged_ = false;
 };
 
 } // namespace dgd
