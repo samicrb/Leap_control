@@ -13,6 +13,26 @@ double nowSeconds() {
     static const auto t0 = clock::now();
     return std::chrono::duration<double>(clock::now() - t0).count();
 }
+
+// Distinguish "the robot itself is misbehaving and must be hard-halted"
+// from "the operator pulled their hands away / the sensor isn't ready
+// / we hit a workspace edge". Only the former justifies the controller
+// STOP_TYPE_QUICK; the latter cases are just a soft pause.
+bool isCriticalFault(FaultReason r) {
+    switch (r) {
+        case FaultReason::RobotError:
+        case FaultReason::InternalError:
+            return true;
+        case FaultReason::None:
+        case FaultReason::SensorDisconnected:
+        case FaultReason::LeftHandLost:
+        case FaultReason::RightHandLost:
+        case FaultReason::RightHandPostureInvalid:
+        case FaultReason::WorkspaceLimit:
+            return false;
+    }
+    return false;
+}
 } // namespace
 
 Application::Application(const Config& cfg,
@@ -124,13 +144,19 @@ void Application::tick(double now_s) {
     //    state (IDLE, READY, RECENTER, GRIPPER, FAULT). For passive
     //    states we only need a SOFT pause - the controller decelerates
     //    via a zero speedl and holds position; this is safe to call at
-    //    60 Hz. Only Fault warrants the hard STOP_TYPE_QUICK path, and
-    //    even there we issue it once on entering the state rather than
-    //    every tick.
+    //    60 Hz.
+    //
+    //    The hard STOP_TYPE_QUICK path is reserved for genuinely
+    //    critical runtime faults (robot error, internal fault); operator
+    //    or sensor faults (hand lost, sensor not ready, workspace edge)
+    //    use the soft pause. The emergency stop fires once on entering
+    //    the critical state and is debounced via fault_emergency_issued_.
     bool touched_limit = false;
     if (cmd.hardStop) {
-        const DemoState s = sm_.state();
-        if (s == DemoState::Fault) {
+        const bool critical =
+            sm_.state() == DemoState::Fault &&
+            isCriticalFault(sm_.faultReason());
+        if (critical) {
             if (!fault_emergency_issued_) {
                 robot_.emergencyStop();
                 fault_emergency_issued_ = true;
