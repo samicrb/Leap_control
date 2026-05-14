@@ -46,6 +46,7 @@ bool StateMachine::conditionsForPositionControl(const GestureReport& g) const {
 }
 
 bool StateMachine::conditionsForOrientationControl(const GestureReport& g) const {
+    if (!cfg_.enable_orientation) return false;
     return g.sensor_ok &&
            g.leftPresent  && g.leftPosture  == HandPosture::Closed &&
            g.rightPresent && g.rightPosture == HandPosture::Closed &&

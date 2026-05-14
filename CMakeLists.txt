@@ -7,6 +7,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(MSVC)
     add_compile_options(/W4 /permissive- /Zc:__cplusplus)
+    add_compile_options($<$<CONFIG:Debug>:/ZI> $<$<CONFIG:Debug>:/FS>)
+    add_link_options($<$<CONFIG:Debug>:/INCREMENTAL>)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -25,6 +27,24 @@ endif()
 # ---------------------------------------------------------------------------
 set(LEAPC_SDK_ROOT "" CACHE PATH "Path to Ultraleap Gemini LeapSDK (contains include/LeapC.h)")
 set(DRFL_SDK_ROOT  "" CACHE PATH "Path to Doosan DRFL 1.33.2 SDK (contains include/DRFLEx.h)")
+option(DGD_DRFL_ENABLE_RT_API "Enable DRFL RT API calls (start_rt_control/speedl_rt/stop_rt_control)." ON)
+option(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME "speedl_rt signature: (vel[6], acc[2], time_s)." OFF)
+option(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC "speedl_rt signature: (vel[6], acc[2])." OFF)
+
+if(DGD_DRFL_ENABLE_RT_API
+   AND NOT DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME
+   AND NOT DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
+    message(STATUS "No speedl_rt signature selected; defaulting to VEL_ACC_TIME (DRFL 1.33.x).")
+    set(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME ON CACHE BOOL "" FORCE)
+endif()
+
+if(DGD_DRFL_ENABLE_RT_API
+   AND DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME
+   AND DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
+    message(FATAL_ERROR
+        "Both DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME and DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC are ON. "
+        "Select exactly one speedl_rt signature.")
+endif()
 
 set(HAVE_LEAPC FALSE)
 if(LEAPC_SDK_ROOT AND EXISTS "${LEAPC_SDK_ROOT}/include/LeapC.h")
@@ -72,6 +92,15 @@ endif()
 
 if(HAVE_DRFL)
     target_compile_definitions(doosan_gesture_demo PRIVATE HAVE_DRFL=1)
+    if(DGD_DRFL_ENABLE_RT_API)
+        target_compile_definitions(doosan_gesture_demo PRIVATE DGD_DRFL_ENABLE_RT_API=1)
+        if(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME)
+            target_compile_definitions(doosan_gesture_demo PRIVATE DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC_TIME=1)
+        endif()
+        if(DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC)
+            target_compile_definitions(doosan_gesture_demo PRIVATE DGD_DRFL_SPEEDL_RT_SIG_VEL_ACC=1)
+        endif()
+    endif()
     target_include_directories(doosan_gesture_demo PRIVATE "${DRFL_SDK_ROOT}/include")
 
     # Resolve the DRFL import library. The 1.33.3 release at

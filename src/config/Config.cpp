@@ -20,7 +20,8 @@ std::string trim(const std::string& s) {
 
 bool parseBool(const std::string& v, bool fallback) {
     std::string t = v;
-    std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+    std::transform(t.begin(), t.end(), t.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (t == "true" || t == "1" || t == "yes" || t == "on")  return true;
     if (t == "false" || t == "0" || t == "no" || t == "off") return false;
     return fallback;
@@ -77,6 +78,11 @@ bool loadConfig(const std::string& path, Config& c) {
     c.singularity_handling  = iGet("robot.singularity_handling",  c.singularity_handling);
     c.home_use_movejx       = bGet("robot.home_use_movejx",       c.home_use_movejx);
     c.auto_reset_safety     = bGet("robot.auto_reset_safety",     c.auto_reset_safety);
+    c.enable_orientation    = bGet("robot.enable_orientation",    c.enable_orientation);
+    c.rt_enabled            = bGet("rt.enabled", c.rt_enabled);
+    c.rt_frequency_hz       = iGet("rt.frequency_hz", c.rt_frequency_hz);
+    c.rt_command_timeout_s  = dGet("rt.command_timeout_s", c.rt_command_timeout_s);
+    c.rt_use_thread         = bGet("rt.use_thread", c.rt_use_thread);
 
     c.loop_rate_hz   = iGet("loop.rate_hz", c.loop_rate_hz);
     c.max_lin_speed  = dGet("robot.max_lin_speed", c.max_lin_speed);

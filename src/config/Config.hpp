@@ -48,6 +48,13 @@ struct Config {
     // check); if state stays in RECOVERY after the reset attempts, the
     // pendant menu Setting -> Robot -> Mastering is the only recovery.
     bool        auto_reset_safety = true;
+    bool        enable_orientation = true;
+
+    // --- DRFL realtime control ---
+    bool   rt_enabled = true;
+    int    rt_frequency_hz = 100;
+    double rt_command_timeout_s = 0.05;
+    bool   rt_use_thread = true;
 
     // --- loop ---
     // Bring-up defaults: low speeds / accels so any safety trip is on
