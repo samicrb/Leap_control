@@ -25,6 +25,7 @@ endif()
 # ---------------------------------------------------------------------------
 set(LEAPC_SDK_ROOT "" CACHE PATH "Path to Ultraleap Gemini LeapSDK (contains include/LeapC.h)")
 set(DRFL_SDK_ROOT  "" CACHE PATH "Path to Doosan DRFL 1.33.2 SDK (contains include/DRFLEx.h)")
+option(DGD_DRFL_ENABLE_RT_API "Enable DRFL RT API calls (start_rt_control/speedl_rt/stop_rt_control)." ON)
 
 set(HAVE_LEAPC FALSE)
 if(LEAPC_SDK_ROOT AND EXISTS "${LEAPC_SDK_ROOT}/include/LeapC.h")
@@ -72,6 +73,9 @@ endif()
 
 if(HAVE_DRFL)
     target_compile_definitions(doosan_gesture_demo PRIVATE HAVE_DRFL=1)
+    if(DGD_DRFL_ENABLE_RT_API)
+        target_compile_definitions(doosan_gesture_demo PRIVATE DGD_DRFL_ENABLE_RT_API=1)
+    endif()
     target_include_directories(doosan_gesture_demo PRIVATE "${DRFL_SDK_ROOT}/include")
 
     # Resolve the DRFL import library. The 1.33.3 release at

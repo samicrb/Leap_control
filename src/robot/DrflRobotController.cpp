@@ -153,6 +153,7 @@ bool DrflRobotController::connect(const std::string& ip, int port, double /*time
 
 void DrflRobotController::disconnect() {
     if (!connected_.load()) return;
+    stopRtControl();
     disengage();
 #if defined(HAVE_DRFL) && HAVE_DRFL
     p_->drfl.close_connection(); // DRFL:
@@ -268,6 +269,9 @@ bool DrflRobotController::engage() {
     LOG_I("Singularity handling set to %d (0=AVOID, 1=STOP, 2=VEL) ok=%d.",
           cfg_.singularity_handling, sing_ok ? 1 : 0);
 #endif
+    if (cfg_.rt_enabled && !startRtControl()) {
+        return false;
+    }
     engaged_.store(true);
     LOG_I("Robot engaged (authority + servo ON + STANDBY + safety=AUTONOMOUS).");
     return true;
@@ -280,6 +284,7 @@ void DrflRobotController::disengage() {
     // STOP_TYPE_QUICK in this path is what was dropping the servo to
     // SAFE_OFF (then surfacing as a phantom "mastering lost" next run).
     stopMotion();
+    stopRtControl();
 #if defined(HAVE_DRFL) && HAVE_DRFL
     // Authority release is handled by close_connection() in disconnect().
 #endif
@@ -404,6 +409,9 @@ bool DrflRobotController::sendCartesianVelocity(const std::array<double, 6>& twi
                            std::abs(twist[5]) < kAngDeadband_deg_s;
 
 #if defined(HAVE_DRFL) && HAVE_DRFL
+    if (cfg_.rt_enabled) {
+        return sendRtVelocity(twist);
+    }
     float accel[2] = { (float)cfg_.max_lin_accel, (float)cfg_.max_ang_accel };
     // Duration tuned slightly larger than the 60 Hz loop period so that
     // a single lost packet doesn't desync the streaming watchdog.
@@ -446,6 +454,11 @@ void DrflRobotController::stopMotion() {
         return;
     }
 #if defined(HAVE_DRFL) && HAVE_DRFL
+    if (rt_active_.load()) {
+        (void)sendRtVelocity({0,0,0,0,0,0});
+        last_was_zero_ = true;
+        return;
+    }
     if (connected_.load() && engaged_.load()) {
         float vel[6] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
         float accel[2] = { (float)cfg_.max_lin_accel,
@@ -455,6 +468,85 @@ void DrflRobotController::stopMotion() {
 #endif
     last_was_zero_ = true;
     LOG_I("Robot: soft stop (speedl zero) issued.");
+}
+
+bool DrflRobotController::startRtControl() {
+    if (rt_active_.load()) return true;
+#if defined(HAVE_DRFL) && HAVE_DRFL
+#if defined(DGD_DRFL_ENABLE_RT_API)
+    if (!p_->drfl.start_rt_control()) {
+        last_error_ = "start_rt_control failed";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
+    rt_active_.store(true);
+    LOG_I("RT Control started.");
+    if (cfg_.rt_use_thread) {
+        rt_thread_running_.store(true);
+        rt_thread_ = std::thread(&DrflRobotController::rtLoop, this);
+        LOG_I("RT command thread started at %d Hz.", cfg_.rt_frequency_hz);
+    }
+#else
+    LOG_W("rt.enabled=true but DRFL RT API is not enabled in this build. Falling back to standard speedl.");
+#endif
+#endif
+    return true;
+}
+
+bool DrflRobotController::stopRtControl() {
+    if (!rt_active_.load()) return true;
+    rt_thread_running_.store(false);
+    if (rt_thread_.joinable()) {
+        rt_thread_.join();
+        LOG_I("RT command thread stopped.");
+    }
+#if defined(HAVE_DRFL) && HAVE_DRFL && defined(DGD_DRFL_ENABLE_RT_API)
+    (void)sendRtVelocity({0,0,0,0,0,0});
+    if (!p_->drfl.stop_rt_control()) {
+        last_error_ = "stop_rt_control failed";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
+#endif
+    rt_active_.store(false);
+    LOG_I("RT Control stopped.");
+    return true;
+}
+
+bool DrflRobotController::sendRtVelocity(const std::array<double, 6>& twist) {
+    if (!rt_active_.load()) return true;
+    if (cfg_.rt_use_thread) {
+        std::lock_guard<std::mutex> lock(rt_cmd_mx_);
+        rt_cmd_ = twist;
+        return true;
+    }
+#if defined(HAVE_DRFL) && HAVE_DRFL && defined(DGD_DRFL_ENABLE_RT_API)
+    float vel[6] = {(float)twist[0], (float)twist[1], (float)twist[2],
+                    (float)twist[3], (float)twist[4], (float)twist[5]};
+    return p_->drfl.speedl_rt(vel, static_cast<float>(cfg_.rt_command_timeout_s));
+#else
+    return true;
+#endif
+}
+
+void DrflRobotController::rtLoop() {
+    const int hz = (cfg_.rt_frequency_hz > 0) ? cfg_.rt_frequency_hz : 100;
+    const auto period = std::chrono::microseconds(1000000 / hz);
+    while (rt_thread_running_.load()) {
+        std::array<double, 6> cmd{};
+        {
+            std::lock_guard<std::mutex> lock(rt_cmd_mx_);
+            cmd = rt_cmd_;
+        }
+#if defined(HAVE_DRFL) && HAVE_DRFL && defined(DGD_DRFL_ENABLE_RT_API)
+        float vel[6] = {(float)cmd[0], (float)cmd[1], (float)cmd[2],
+                        (float)cmd[3], (float)cmd[4], (float)cmd[5]};
+        if (!p_->drfl.speedl_rt(vel, static_cast<float>(cfg_.rt_command_timeout_s))) {
+            LOG_E("speedl_rt failed in RT thread.");
+        }
+#endif
+        std::this_thread::sleep_for(period);
+    }
 }
 
 void DrflRobotController::emergencyStop() {

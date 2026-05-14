@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 namespace dgd {
 
@@ -61,6 +62,16 @@ private:
     // emit a single zero command on the falling edge (active->idle) and
     // then stay quiet, rather than spamming speedl(0) at 60 Hz.
     bool      last_was_zero_ = true;
+    std::atomic<bool> rt_active_{false};
+    std::atomic<bool> rt_thread_running_{false};
+    std::thread rt_thread_;
+    mutable std::mutex rt_cmd_mx_;
+    std::array<double, 6> rt_cmd_{0,0,0,0,0,0};
+
+    bool startRtControl();
+    bool stopRtControl();
+    bool sendRtVelocity(const std::array<double, 6>& twist);
+    void rtLoop();
 };
 
 } // namespace dgd
