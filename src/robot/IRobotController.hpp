@@ -34,8 +34,18 @@ public:
     // realtime streaming primitive at the correct rate.
     virtual bool sendCartesianVelocity(const std::array<double, 6>& twist) = 0;
 
-    // Halt current motion immediately and safely. Must not throw.
+    // SOFT pause. Stream a zero Cartesian velocity so the controller
+    // decelerates smoothly to a stand-still and holds position.
+    // Idempotent and safe to call at the demo loop rate (60 Hz) -
+    // notably from passive states (IDLE / READY / RECENTER / GRIPPER).
+    // Must not throw.
     virtual void stopMotion() = 0;
+
+    // HARD halt. Issue a controller-level STOP_TYPE_QUICK. Reserved for
+    // real faults and shutdown: this can drop the servo into SAFE_OFF
+    // on some controllers, so do NOT call it from a streaming loop.
+    // Must not throw.
+    virtual void emergencyStop() = 0;
 
     // --- State queries -------------------------------------------------
     virtual bool getCurrentPose(RobotPose& out) = 0;

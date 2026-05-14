@@ -37,6 +37,7 @@ public:
 
     bool sendCartesianVelocity(const std::array<double, 6>& twist) override;
     void stopMotion() override;
+    void emergencyStop() override;
     bool getCurrentPose(RobotPose& out) override;
 
     std::string lastError() const override { return last_error_; }
@@ -56,6 +57,10 @@ private:
     RobotPose current_pose_;
     double    last_twist_time_s_ = 0.0;
     std::array<double, 6> last_twist_ {0,0,0,0,0,0};
+    // Tracks whether the last speedl we issued was at zero so we can
+    // emit a single zero command on the falling edge (active->idle) and
+    // then stay quiet, rather than spamming speedl(0) at 60 Hz.
+    bool      last_was_zero_ = true;
 };
 
 } // namespace dgd

@@ -11,6 +11,7 @@
 #include "ui/ConsoleUI.hpp"
 
 #include <atomic>
+#include <array>
 #include <memory>
 
 namespace dgd {
@@ -52,6 +53,29 @@ private:
 
     HandFrame          last_frame_{};
     std::atomic<bool>  running_{false};
+    // Latches whether we already fired the one-shot emergencyStop() for
+    // the current Fault entry. Reset whenever we leave the Fault state.
+    bool               fault_emergency_issued_ = false;
+    // Previous tick's DemoState; used to detect active->passive and
+    // passive->active transitions so we only send stopMotion() once on
+    // the falling edge (never at the 60 Hz loop rate while sitting in
+    // a stable passive state - this is what was leading to alarm 5.7056
+    // "Standstill status violated").
+    DemoState          prev_state_ = DemoState::Idle;
+    // UI pose cache. We MUST NOT call robot_.getCurrentPose() during
+    // active streaming (PositionControl / OrientationControl) - that
+    // call resolves to a non-motion DRFL command
+    // (CONTROL_CHECK_CURRENT_TASK_POSITION) and interleaving it with
+    // speedl() reliably trips alarm 5.7056. Instead we cache the pose
+    // and refresh it at low frequency only while the streaming pipe
+    // is quiet.
+    RobotPose          last_pose_for_ui_{};
+    double             last_pose_poll_s_ = 0.0;
+    bool               decel_active_ = false;
+    int                decel_step_ = 0;
+    std::array<double, 6> decel_start_twist_{0, 0, 0, 0, 0, 0};
+    std::array<double, 6> last_active_twist_{0, 0, 0, 0, 0, 0};
+    DemoState          pending_passive_state_ = DemoState::Idle;
 };
 
 } // namespace dgd
