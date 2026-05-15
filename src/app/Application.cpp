@@ -56,6 +56,21 @@ double computeStep(double error, double min_step, double max_step,
     return std::copysign(step_abs, error);
 }
 
+// Clamp v to ±limit.
+double clampAbs(double v, double limit) {
+    if (v >  limit) return  limit;
+    if (v < -limit) return -limit;
+    return v;
+}
+
+// Limit |delta| between two scalars so |v_new - v_prev| <= cap.
+double limitDelta(double v_new, double v_prev, double cap) {
+    const double d = v_new - v_prev;
+    if (d >  cap) return v_prev + cap;
+    if (d < -cap) return v_prev - cap;
+    return v_new;
+}
+
 } // namespace
 
 Application::Application(const Config& cfg,
@@ -190,8 +205,13 @@ void Application::tick(double now_s) {
         virtual_target_initialised_     = false;
         active_entry_robot_pose_valid_  = false;
         last_commanded_target_valid_    = false;
-    } else if (cur_active) {
-        // Active control via the MICRO-MOTION SUPERVISOR.
+        ramp_to_zero_                   = false;
+        filtered_velocity_.fill(0.0);
+        last_accel_.fill(0.0);
+    } else if (cur_active || ramp_to_zero_) {
+        // Active control via the MICRO-MOTION SUPERVISOR (with optional
+        // velocity-smoothing tail when ramp_to_zero_ is latched).
+        // ----------------------------------------------------------
         //
         // The active path issues discrete amovel commands only. Two
         // controller modes exist:
@@ -228,6 +248,12 @@ void Application::tick(double now_s) {
                 active_entry_robot_pose_valid_ = true;
                 last_commanded_target_valid_   = true;
                 last_command_sent_s_           = now_s - cfg_.micro_min_period_s;
+                // Reset velocity smoothing state - the robot is at rest
+                // at active entry.
+                filtered_velocity_.fill(0.0);
+                last_accel_.fill(0.0);
+                last_vel_update_s_ = now_s;
+                ramp_to_zero_      = false;
                 if (cfg_.micro_pursuit_enabled) {
                     LOG_I("State %s -> %s : entering MICRO-PURSUIT "
                           "(ratio=%.2f, step=[%.1f..%.1f mm / %.1f..%.1f deg], "
@@ -268,7 +294,7 @@ void Application::tick(double now_s) {
 
             // PURSUIT mode: recompute desired_target_pose_ every tick.
             // (Independent of scheduler - tracks the operator continuously.)
-            if (cfg_.micro_pursuit_enabled) {
+            if (cfg_.micro_pursuit_enabled && cur_active) {
                 // Recover the raw hand displacement from cmd.linear_velocity.
                 // The state machine emits  cmd.linear_velocity = position_scale
                 // * hand_displacement, so dividing back recovers the geometric
@@ -291,12 +317,173 @@ void Application::tick(double now_s) {
                     + r * cmd.angular_velocity[1] * inv_rot;
                 desired_target_pose_.rz = active_entry_robot_pose_.rz
                     + r * cmd.angular_velocity[2] * inv_rot;
+            } else if (ramp_to_zero_) {
+                // Ramp-to-zero: hold the desired target at the current
+                // commanded position. Zero error -> zero desired
+                // velocity -> filtered velocity decays under accel/jerk
+                // caps. The amovel tail naturally decelerates.
+                desired_target_pose_ = last_commanded_target_pose_;
             }
 
             if (elapsed < period_floor) {
                 // Too soon since last amovel - skip. No log: 60 Hz spam.
+            } else if (cfg_.micro_pursuit_enabled &&
+                       cfg_.micro_velocity_filter_enabled) {
+                // --- PURSUIT + VELOCITY-SMOOTHED step ----------------
+                // Instead of committing to a fixed-size position step,
+                // we derive a desired Cartesian velocity from the
+                // remaining pose error, low-pass filter it, then apply
+                // hard accel and jerk caps. The new amovel target is
+                // last_commanded + filtered_velocity * dt. The robot
+                // therefore sees a continuous velocity profile - no
+                // visible accel/decel between segments.
+                const double dt   = std::max(elapsed, 1e-3);
+                const double Kp_l = std::max(cfg_.micro_command_rate_hz, 1.0);
+                const double Kp_r = Kp_l;
+
+                // 1. Raw error.
+                double err[6] = {
+                    desired_target_pose_.x  - last_commanded_target_pose_.x,
+                    desired_target_pose_.y  - last_commanded_target_pose_.y,
+                    desired_target_pose_.z  - last_commanded_target_pose_.z,
+                    desired_target_pose_.rx - last_commanded_target_pose_.rx,
+                    desired_target_pose_.ry - last_commanded_target_pose_.ry,
+                    desired_target_pose_.rz - last_commanded_target_pose_.rz
+                };
+
+                // 2. Desired velocity v_des = Kp * err, clamped to caps.
+                double v_des[6] = {
+                    clampAbs(Kp_l * err[0], cfg_.micro_lin_vel),
+                    clampAbs(Kp_l * err[1], cfg_.micro_lin_vel),
+                    clampAbs(Kp_l * err[2], cfg_.micro_lin_vel),
+                    clampAbs(Kp_r * err[3], cfg_.micro_ang_vel),
+                    clampAbs(Kp_r * err[4], cfg_.micro_ang_vel),
+                    clampAbs(Kp_r * err[5], cfg_.micro_ang_vel)
+                };
+
+                // 3. Low-pass filter.
+                const double a = clampAbs(cfg_.micro_velocity_filter_alpha, 1.0);
+                double v_filt[6];
+                for (int i = 0; i < 6; ++i) {
+                    v_filt[i] = a * v_des[i] + (1.0 - a) * filtered_velocity_[i];
+                }
+
+                // 4. Acceleration limit.
+                const double accel_cap_lin = cfg_.micro_lin_acc * dt;
+                const double accel_cap_ang = cfg_.micro_ang_acc * dt;
+                for (int i = 0; i < 3; ++i) {
+                    v_filt[i] = limitDelta(v_filt[i], filtered_velocity_[i],
+                                           accel_cap_lin);
+                }
+                for (int i = 3; i < 6; ++i) {
+                    v_filt[i] = limitDelta(v_filt[i], filtered_velocity_[i],
+                                           accel_cap_ang);
+                }
+
+                // 5. Jerk limit (cap on rate of change of acceleration).
+                const double jerk_cap_lin = cfg_.micro_max_jerk_xyz * dt;
+                const double jerk_cap_ang = cfg_.micro_max_jerk_rot * dt;
+                double accel_new[6];
+                for (int i = 0; i < 6; ++i) {
+                    accel_new[i] = (v_filt[i] - filtered_velocity_[i]) / dt;
+                }
+                for (int i = 0; i < 3; ++i) {
+                    accel_new[i] = limitDelta(accel_new[i], last_accel_[i],
+                                              jerk_cap_lin);
+                    v_filt[i] = filtered_velocity_[i] + accel_new[i] * dt;
+                }
+                for (int i = 3; i < 6; ++i) {
+                    accel_new[i] = limitDelta(accel_new[i], last_accel_[i],
+                                              jerk_cap_ang);
+                    v_filt[i] = filtered_velocity_[i] + accel_new[i] * dt;
+                }
+
+                // 6. Velocity deadband: kill micro-dribble.
+                const double vbd_lin = cfg_.micro_velocity_deadband_mm_s;
+                const double vbd_ang = vbd_lin * 0.1;  // crude scaling for deg/s
+                bool any_velocity = false;
+                for (int i = 0; i < 3; ++i) {
+                    if (std::abs(v_filt[i]) < vbd_lin) {
+                        v_filt[i] = 0.0; accel_new[i] = 0.0;
+                    } else any_velocity = true;
+                }
+                for (int i = 3; i < 6; ++i) {
+                    if (std::abs(v_filt[i]) < vbd_ang) {
+                        v_filt[i] = 0.0; accel_new[i] = 0.0;
+                    } else any_velocity = true;
+                }
+
+                // Commit state.
+                for (int i = 0; i < 6; ++i) {
+                    filtered_velocity_[i] = v_filt[i];
+                    last_accel_[i]        = accel_new[i];
+                }
+                last_vel_update_s_ = now_s;
+
+                // Ramp-to-zero completion: stop when velocity drops to
+                // the deadband on every axis, or the ramp time budget
+                // expires. After that the pursuit pipeline goes quiet
+                // and the last in-flight amovel runs to completion.
+                if (ramp_to_zero_) {
+                    const bool timeout =
+                        (now_s - ramp_start_s_) >= cfg_.micro_stop_ramp_time_s;
+                    if (!any_velocity || timeout) {
+                        LOG_I("Velocity ramp-to-zero complete "
+                              "(any_velocity=%d, timeout=%d, elapsed=%.3fs).",
+                              any_velocity ? 1 : 0, timeout ? 1 : 0,
+                              now_s - ramp_start_s_);
+                        ramp_to_zero_                  = false;
+                        active_entry_robot_pose_valid_ = false;
+                        last_commanded_target_valid_   = false;
+                        virtual_target_initialised_    = false;
+                        filtered_velocity_.fill(0.0);
+                        last_accel_.fill(0.0);
+                    }
+                }
+
+                if (any_velocity) {
+                    // 7. Integrate to next target.
+                    RobotPose pursuit_target = last_commanded_target_pose_;
+                    pursuit_target.x  += v_filt[0] * dt;
+                    pursuit_target.y  += v_filt[1] * dt;
+                    pursuit_target.z  += v_filt[2] * dt;
+                    pursuit_target.rx += v_filt[3] * dt;
+                    pursuit_target.ry += v_filt[4] * dt;
+                    pursuit_target.rz += v_filt[5] * dt;
+
+                    const double seg_norm = std::sqrt(
+                        (v_filt[0]*dt)*(v_filt[0]*dt) +
+                        (v_filt[1]*dt)*(v_filt[1]*dt) +
+                        (v_filt[2]*dt)*(v_filt[2]*dt));
+                    const double radius = cfg_.micro_blending_enabled
+                        ? std::min(cfg_.micro_blending_radius_mm,
+                                   0.4 * seg_norm)
+                        : 0.0;
+
+                    LOG_D("vel-smooth: err=[%.2f %.2f %.2f / %.2f %.2f %.2f] "
+                          "v=[%.1f %.1f %.1f / %.2f %.2f %.2f] "
+                          "a=[%.0f %.0f %.0f / %.1f %.1f %.1f] seg=%.2f r=%.2f.",
+                          err[0], err[1], err[2], err[3], err[4], err[5],
+                          v_filt[0], v_filt[1], v_filt[2],
+                          v_filt[3], v_filt[4], v_filt[5],
+                          accel_new[0], accel_new[1], accel_new[2],
+                          accel_new[3], accel_new[4], accel_new[5],
+                          seg_norm, radius);
+
+                    if (robot_.sendCartesianMicroMove(
+                            pursuit_target,
+                            cfg_.micro_lin_vel, cfg_.micro_ang_vel,
+                            cfg_.micro_lin_acc, cfg_.micro_ang_acc,
+                            radius)) {
+                        last_commanded_target_pose_ = pursuit_target;
+                        last_command_sent_s_        = now_s;
+                    } else {
+                        LOG_W("Pursuit-velocity micro-move refused: %s",
+                              robot_.lastError().c_str());
+                    }
+                }
             } else if (cfg_.micro_pursuit_enabled) {
-                // --- PURSUIT step ---------------------------------------
+                // --- PURSUIT step (legacy position-step path) -----------
                 const double sx  = computeStep(
                     desired_target_pose_.x  - last_commanded_target_pose_.x,
                     cfg_.micro_min_step_xyz_mm, cfg_.micro_max_step_xyz_mm,
@@ -410,17 +597,30 @@ void Application::tick(double now_s) {
         }
         fault_emergency_issued_ = false;
     } else if (prev_active) {
-        // Falling edge active -> passive. Per the supervisor design we
-        // simply STOP issuing new amovels. The last in-flight short
-        // motion completes naturally and the controller halts smoothly
-        // at its end pose. NO stopMotion(), NO speedl(0), NO
-        // emergencyStop, NO mwait.
-        LOG_I("State %s -> %s : ceasing micro-motion stream "
-              "(last in-flight amovel will run to completion).",
-              stateName(prev_state_), stateName(cur_state));
-        virtual_target_initialised_    = false;
-        active_entry_robot_pose_valid_ = false;
-        last_commanded_target_valid_   = false;
+        // Falling edge active -> passive. Start the velocity ramp-to-
+        // zero: keep the controller running for a short tail so the
+        // filtered velocity decays under the configured accel / jerk
+        // caps, instead of disappearing in one step. Each tail tick
+        // still issues amovel commands - NO stopMotion(), NO speedl(0),
+        // NO emergencyStop, NO mwait. The ramp branch is entered on
+        // the NEXT tick via (ramp_to_zero_ && !cur_active).
+        if (cfg_.micro_velocity_filter_enabled &&
+            active_entry_robot_pose_valid_) {
+            ramp_to_zero_ = true;
+            ramp_start_s_ = now_s;
+            LOG_I("State %s -> %s : starting velocity ramp-to-zero "
+                  "(~%.2fs).",
+                  stateName(prev_state_), stateName(cur_state),
+                  cfg_.micro_stop_ramp_time_s);
+        } else {
+            // Velocity smoothing disabled - keep the legacy behaviour:
+            // stop issuing, let the last amovel run to completion.
+            LOG_I("State %s -> %s : ceasing micro-motion stream.",
+                  stateName(prev_state_), stateName(cur_state));
+            virtual_target_initialised_    = false;
+            active_entry_robot_pose_valid_ = false;
+            last_commanded_target_valid_   = false;
+        }
         fault_emergency_issued_        = false;
     } else {
         // Passive -> passive (stable). Do NOT touch the robot.

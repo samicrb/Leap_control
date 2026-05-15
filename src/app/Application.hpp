@@ -92,6 +92,17 @@ private:
     RobotPose             desired_target_pose_{};
     RobotPose             last_commanded_target_pose_{};
     bool                  last_commanded_target_valid_ = false;
+
+    // Velocity smoothing layer state. v[0..2] are linear (mm/s), v[3..5]
+    // are angular (deg/s). The controller integrates filtered_velocity_
+    // into last_commanded_target_pose_ each tick. ramp_to_zero_ keeps
+    // the controller running for a brief tail after active mode ends,
+    // so the robot never sees an instantaneous velocity step to zero.
+    std::array<double, 6> filtered_velocity_ {0, 0, 0, 0, 0, 0};
+    std::array<double, 6> last_accel_        {0, 0, 0, 0, 0, 0};
+    double                last_vel_update_s_ = 0.0;
+    bool                  ramp_to_zero_      = false;
+    double                ramp_start_s_      = 0.0;
 };
 
 } // namespace dgd

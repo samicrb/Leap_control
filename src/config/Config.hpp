@@ -157,6 +157,32 @@ struct Config {
     double micro_max_step_rot_deg     = 4.0;
     double micro_arrival_band_xyz_mm  = 2.0;
     double micro_arrival_band_rot_deg = 0.5;
+
+    // --- Velocity smoothing layer (sits on top of the pursuit controller) ---
+    // When enabled, the active control loop no longer commands a position
+    // step directly: it derives a desired Cartesian VELOCITY from the
+    // pose error, low-pass filters it, then applies hard acceleration and
+    // jerk limits before integrating to the next target. The result is a
+    // continuous velocity profile that no longer accelerates/decelerates
+    // visibly between segments.
+    //
+    // Disable to revert to the pure position-step pursuit controller.
+    bool   micro_velocity_filter_enabled = true;
+    // Low-pass filter alpha on the desired velocity (1 = no filtering,
+    // 0 = infinite filtering / frozen). Lower = smoother but laggier.
+    double micro_velocity_filter_alpha   = 0.35;
+    // Hard jerk caps (mm/s^3 and deg/s^3). Smaller = silkier accel
+    // transitions, larger = snappier.
+    double micro_max_jerk_xyz            = 3000.0;
+    double micro_max_jerk_rot            = 800.0;
+    // Below this band, treat the filtered velocity as zero and skip the
+    // amovel - avoids dribbling commands when the hand is held still.
+    double micro_velocity_deadband_mm_s  = 1.5;
+    // When leaving active mode (hand lost, deadman released, etc.) the
+    // controller drives the desired velocity to zero over this duration
+    // using the same accel / jerk limits. NO speedl, NO stopMotion - the
+    // tail ticks are still amovels with shrinking velocity targets.
+    double micro_stop_ramp_time_s        = 0.18;
 };
 
 // Loads config from disk. Missing keys keep their defaults. Returns true

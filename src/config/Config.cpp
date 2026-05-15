@@ -169,6 +169,13 @@ bool loadConfig(const std::string& path, Config& c) {
     c.micro_arrival_band_xyz_mm  = dGet("robot.micro_arrival_band_xyz_mm",  c.micro_arrival_band_xyz_mm);
     c.micro_arrival_band_rot_deg = dGet("robot.micro_arrival_band_rot_deg", c.micro_arrival_band_rot_deg);
 
+    c.micro_velocity_filter_enabled = bGet("robot.micro_velocity_filter_enabled", c.micro_velocity_filter_enabled);
+    c.micro_velocity_filter_alpha   = dGet("robot.micro_velocity_filter_alpha",   c.micro_velocity_filter_alpha);
+    c.micro_max_jerk_xyz            = dGet("robot.micro_max_jerk_xyz",            c.micro_max_jerk_xyz);
+    c.micro_max_jerk_rot            = dGet("robot.micro_max_jerk_rot",            c.micro_max_jerk_rot);
+    c.micro_velocity_deadband_mm_s  = dGet("robot.micro_velocity_deadband_mm_s",  c.micro_velocity_deadband_mm_s);
+    c.micro_stop_ramp_time_s        = dGet("robot.micro_stop_ramp_time_s",        c.micro_stop_ramp_time_s);
+
     LOG_I("Config loaded from %s (%zu keys)", path.c_str(), kv.size());
     return true;
 }
