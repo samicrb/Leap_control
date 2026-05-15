@@ -42,22 +42,28 @@ public:
     virtual void stopMotion() = 0;
 
     // Discrete, NON-BLOCKING Cartesian micro-motion to a target pose.
-    // Adapter MUST use amovel(...) and MUST NOT call mwait(). Blending
-    // can be enabled only for active micro-motion chaining.
+    // The adapter uses amovel(...) (async) and MUST NOT call mwait().
     //
     // This is the only motion primitive the Application's active loop is
     // allowed to use during PositionControl / OrientationControl. The
-    // scheduler (Application) caps the issue rate (typically 5 Hz) and
-    // bounds the per-command delta so each motion completes well before
-    // the next is issued.
+    // scheduler (Application) caps the issue rate and bounds the
+    // per-command step.
+    //
+    // blending_radius_mm: optional inter-segment blending radius. 0
+    // disables blending and the controller decelerates to a complete
+    // stop at the end of each segment. A small positive value (2..10
+    // mm) chains consecutive amovel segments smoothly. Some DRFL
+    // overloads of amovel(...) do not expose a radius parameter; the
+    // adapter is free to map it onto BLENDING_SPEED_TYPE instead. The
+    // caller MUST guarantee that no non-motion DRFL command is issued
+    // between two blended micro-motions (alarm 5.7056).
     //
     // vel/acc are scalar caps (mm/s, deg/s, mm/s^2, deg/s^2). Returns
     // false if the command was refused / the link isn't ready.
     virtual bool sendCartesianMicroMove(const RobotPose& target,
                                         double lin_vel, double ang_vel,
                                         double lin_acc, double ang_acc,
-                                        double blend_radius_mm = 0.0,
-                                        const std::string& blend_type = "duplicate") = 0;
+                                        double blending_radius_mm = 0.0) = 0;
 
     // HARD halt. Issue a controller-level STOP_TYPE_QUICK. Reserved for
     // real faults and shutdown: this can drop the servo into SAFE_OFF

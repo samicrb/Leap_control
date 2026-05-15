@@ -50,14 +50,14 @@ struct Config {
     bool        auto_reset_safety = true;
 
     // --- loop ---
-    // Bring-up defaults: very low speeds / accels so the joint-level
-    // safety supervisor cannot trip on dynamics (alarm 5.7056). Decel
-    // ramp + envelope still apply on top.
+    // Profile aligned with the micro-pursuit segment dynamics:
+    //   typical segment length ~ v^2 / a  =>  120^2 / 650 ~ 22 mm
+    // so max_step_xyz_mm and per-segment caps match these caps.
     int    loop_rate_hz    = 60;
     double max_lin_speed   = 120.0;
-    double max_ang_speed   = 25.0;
-    double max_lin_accel   = 450.0;
-    double max_ang_accel   = 120.0;
+    double max_ang_speed   = 28.0;
+    double max_lin_accel   = 650.0;
+    double max_ang_accel   = 160.0;
 
     // --- workspace envelope (mm, deg) ---
     // When ws_enabled = false the box and orientation cone are NOT enforced
@@ -85,13 +85,15 @@ struct Config {
     double posture_hold_s        = 0.10;
 
     // --- motion mapping ---
-    // Bring-up defaults: very small. Tune up once decel ramp + alarm
-    // budget are confirmed stable.
-    double position_scale    = 0.32;
-    double orientation_scale = 0.16;
-    double position_deadzone_mm = 2.0;
-    double orientation_deadzone_deg = 2.0;
-    double smoothing_alpha   = 0.10;
+    // Profile tuned for the micro-pursuit controller. position_scale is
+    // the gain applied by the state machine to the raw hand displacement
+    // (the pursuit controller divides back by it to recover hand_delta,
+    // then re-applies micro_hand_to_robot_ratio).
+    double position_scale    = 0.90;
+    double orientation_scale = 0.45;
+    double position_deadzone_mm = 1.5;
+    double orientation_deadzone_deg = 1.5;
+    double smoothing_alpha   = 0.14;
     int    sign_x = 1, sign_y = 1, sign_z = 1;
     int    sign_rx = 1, sign_ry = 1, sign_rz = 1;
 
@@ -123,26 +125,38 @@ struct Config {
     bool dryrun_gripper = false;
 
     // --- micro-motion supervisor (replaces continuous speedl streaming) ---
-    // The active control loop now schedules SHORT, NON-BLENDED amovel
-    // commands at micro_command_rate_hz instead of streaming speedl()
-    // every tick. This removes the failure mode where alarm 5.7056
-    // (OPERATION_SAFETY_FUNCTION_SOS_VIOLATION) was tripped by the
-    // joint-accel supervisor on a continuous velocity profile.
-    double micro_command_rate_hz       = 18.0;   // robot command issue rate
-    double micro_min_period_s          = 0.055;  // hard lower bound between commands
-    double micro_max_delta_xyz_mm      = 12.0;   // per-command position step cap
-    double micro_max_delta_rot_deg     = 3.0;    // per-command orientation step cap
-    double micro_deadband_mm           = 0.6;    // skip command if delta below
+    // The active control loop schedules discrete amovel commands. With
+    // pursuit_enabled (default) the operator's hand defines an absolute
+    // desired target relative to the pose captured on active-mode entry,
+    // and the robot follows it via bounded lookahead steps. Without
+    // pursuit, the legacy incremental integrator is used.
+    double micro_command_rate_hz       = 10.0;   // robot command issue rate
+    double micro_min_period_s          = 0.10;   // hard lower bound between commands
+    double micro_max_delta_xyz_mm      = 22.0;   // legacy incremental cap
+    double micro_max_delta_rot_deg     = 4.0;
+    double micro_deadband_mm           = 0.5;
     double micro_deadband_deg          = 0.3;
-    // amovel motion profile for active micro-motions.
-    double micro_lin_vel               = 160.0;  // mm/s
-    double micro_ang_vel               = 35.0;   // deg/s
-    double micro_lin_acc               = 450.0;  // mm/s^2
-    double micro_ang_acc               = 120.0;  // deg/s^2
-    // Optional blending for micro-motion chaining (active modes only).
+    // amovel motion profile.
+    double micro_lin_vel               = 120.0;  // mm/s
+    double micro_ang_vel               = 28.0;   // deg/s
+    double micro_lin_acc               = 650.0;  // mm/s^2
+    double micro_ang_acc               = 160.0;  // deg/s^2
+    // Blending. Controls smoothness across consecutive amovel segments.
+    // Disable to revert exactly to the previous non-blended behaviour.
     bool        micro_blending_enabled   = true;
-    double      micro_blending_radius_mm = 4.0;
-    std::string micro_blending_type      = "duplicate";
+    double      micro_blending_radius_mm = 8.0;
+    std::string micro_blending_type      = "duplicate";  // duplicate | override
+    // Pursuit / lookahead controller. Smooths the perceived motion by
+    // tracking an absolute desired target (ratio * hand_displacement
+    // from active-mode entry) with bounded pursuit steps.
+    bool   micro_pursuit_enabled      = true;
+    double micro_hand_to_robot_ratio  = 0.60;
+    double micro_min_step_xyz_mm      = 5.0;
+    double micro_max_step_xyz_mm      = 22.0;
+    double micro_min_step_rot_deg     = 0.8;
+    double micro_max_step_rot_deg     = 4.0;
+    double micro_arrival_band_xyz_mm  = 2.0;
+    double micro_arrival_band_rot_deg = 0.5;
 };
 
 // Loads config from disk. Missing keys keep their defaults. Returns true

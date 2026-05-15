@@ -74,16 +74,24 @@ private:
 
     // --- Micro-motion supervisor state ---
     //
-    // Active control no longer streams speedl(). The Leap hand drives a
-    // virtual target pose; short non-blended amovel commands are issued
-    // toward it at a low rate (cfg_.micro_command_rate_hz, ~5 Hz). The
-    // virtual pose is seeded from the real TCP pose ONCE on entering
-    // active mode (the only getCurrentPose call allowed in the active
-    // path). After that the integrator runs purely off the gesture
-    // velocity stream, with per-command bounds and a deadband.
-    RobotPose             virtual_target_pose_{};
+    // The Leap hand drives an absolute desired target relative to the
+    // robot pose captured ONCE on entering active mode (the only
+    // getCurrentPose call allowed in the active path). The pursuit
+    // controller then advances last_commanded_target_pose_ toward
+    // desired_target_pose_ via bounded amovel steps. Blending across
+    // consecutive segments is on by default for visual continuity.
+    //
+    // The legacy incremental path (virtual_target_pose_) is kept and
+    // selected via cfg_.micro_pursuit_enabled = false.
+    RobotPose             virtual_target_pose_{};        // legacy path
     bool                  virtual_target_initialised_ = false;
     double                last_command_sent_s_ = 0.0;
+
+    RobotPose             active_entry_robot_pose_{};
+    bool                  active_entry_robot_pose_valid_ = false;
+    RobotPose             desired_target_pose_{};
+    RobotPose             last_commanded_target_pose_{};
+    bool                  last_commanded_target_valid_ = false;
 };
 
 } // namespace dgd

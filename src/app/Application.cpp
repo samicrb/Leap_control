@@ -43,6 +43,19 @@ bool isActiveState(DemoState s) {
            s == DemoState::OrientationControl;
 }
 
+// Pursuit step: pick a value along `error` that closes the gap without
+// overshoot and without firing micro-steps below the arrival band.
+double computeStep(double error, double min_step, double max_step,
+                   double arrival_band) {
+    const double abs_e = std::abs(error);
+    if (abs_e < arrival_band) return 0.0;
+    double step_abs = std::min(abs_e, max_step);
+    if (step_abs > arrival_band) {
+        step_abs = std::max(step_abs, std::min(min_step, abs_e));
+    }
+    return std::copysign(step_abs, error);
+}
+
 } // namespace
 
 Application::Application(const Config& cfg,
@@ -173,58 +186,185 @@ void Application::tick(double now_s) {
         LOG_W("CRITICAL fault (%s) - emergencyStop issued.",
               faultReasonText(fault_now));
         robot_.emergencyStop();
-        fault_emergency_issued_ = true;
-        virtual_target_initialised_ = false;
+        fault_emergency_issued_         = true;
+        virtual_target_initialised_     = false;
+        active_entry_robot_pose_valid_  = false;
+        last_commanded_target_valid_    = false;
     } else if (cur_active) {
         // Active control via the MICRO-MOTION SUPERVISOR.
         //
-        // We do NOT stream speedl() any more. Continuous velocity
-        // profiles were tripping the joint-accel safety supervisor
-        // (alarm 5.7056). Instead we maintain a virtual target pose,
-        // accumulate hand-driven deltas into it, and issue at most
-        // ~5 Hz a SHORT, NON-BLENDED amovel toward the new target.
+        // The active path issues discrete amovel commands only. Two
+        // controller modes exist:
         //
-        // The ONLY DRFL command we issue in this branch is the amovel
-        // call, and only when the scheduler permits. No getCurrentPose
-        // (except a single seed read on entry), no stopMotion, no
-        // robot-mode change.
+        //   - PURSUIT (default, cfg_.micro_pursuit_enabled = true):
+        //       The hand defines an ABSOLUTE desired target relative
+        //       to active_entry_robot_pose_ (snapshotted on entry).
+        //       Each scheduler tick a bounded pursuit step is applied
+        //       to last_commanded_target_pose_ so it tracks
+        //       desired_target_pose_ continuously. Blending across
+        //       consecutive amovel segments preserves velocity at the
+        //       boundaries -> visually fluid motion.
+        //
+        //   - LEGACY incremental (cfg_.micro_pursuit_enabled = false):
+        //       Per-tick velocity*dt is integrated into a virtual
+        //       target; amovel emits each new target. Kept for
+        //       backward compatibility.
+        //
+        // In BOTH modes:
+        //   - The ONLY DRFL command issued in this branch is amovel().
+        //   - getCurrentPose() runs at most ONCE per active entry to
+        //     seed the controller; it never interleaves with an
+        //     in-flight amovel.
+        //   - No stopMotion, no mode change, no mwait.
         if (!prev_active) {
-            // Seed the virtual target from the real TCP pose. This is
-            // the ONE getCurrentPose() permitted in the active path; it
-            // happens once, before any micro-motion is queued, so it
-            // cannot interleave with an in-flight amovel.
+            // Seed both controllers from the real TCP pose.
             RobotPose seed;
             if (robot_.getCurrentPose(seed)) {
-                virtual_target_pose_       = seed;
-                virtual_target_initialised_ = true;
-                last_command_sent_s_       = now_s - cfg_.micro_min_period_s;
-                LOG_I("State %s -> %s : entering MICRO-MOTION mode "
-                      "(virtual target seeded from real pose).",
-                      stateName(prev_state_), stateName(cur_state));
+                virtual_target_pose_           = seed;
+                virtual_target_initialised_    = true;
+                active_entry_robot_pose_       = seed;
+                desired_target_pose_           = seed;
+                last_commanded_target_pose_    = seed;
+                active_entry_robot_pose_valid_ = true;
+                last_commanded_target_valid_   = true;
+                last_command_sent_s_           = now_s - cfg_.micro_min_period_s;
+                if (cfg_.micro_pursuit_enabled) {
+                    LOG_I("State %s -> %s : entering MICRO-PURSUIT "
+                          "(ratio=%.2f, step=[%.1f..%.1f mm / %.1f..%.1f deg], "
+                          "rate=%.1f Hz, blend=%s @ %.1f mm).",
+                          stateName(prev_state_), stateName(cur_state),
+                          cfg_.micro_hand_to_robot_ratio,
+                          cfg_.micro_min_step_xyz_mm, cfg_.micro_max_step_xyz_mm,
+                          cfg_.micro_min_step_rot_deg, cfg_.micro_max_step_rot_deg,
+                          cfg_.micro_command_rate_hz,
+                          cfg_.micro_blending_enabled ? "ON" : "OFF",
+                          cfg_.micro_blending_radius_mm);
+                } else {
+                    LOG_I("State %s -> %s : entering MICRO-MOTION (legacy "
+                          "incremental, rate=%.1f Hz).",
+                          stateName(prev_state_), stateName(cur_state),
+                          cfg_.micro_command_rate_hz);
+                }
             } else {
-                virtual_target_initialised_ = false;
-                LOG_W("State %s -> %s : entering MICRO-MOTION mode but "
-                      "could not seed virtual target (getCurrentPose failed).",
+                virtual_target_initialised_    = false;
+                active_entry_robot_pose_valid_ = false;
+                last_commanded_target_valid_   = false;
+                LOG_W("State %s -> %s : entering active mode but could not "
+                      "seed pose (getCurrentPose failed).",
                       stateName(prev_state_), stateName(cur_state));
             }
         }
-        if (virtual_target_initialised_) {
-            // Scheduler: throttle to micro_command_rate_hz.
+
+        const bool ready = cfg_.micro_pursuit_enabled
+            ? (active_entry_robot_pose_valid_ && last_commanded_target_valid_)
+            : virtual_target_initialised_;
+
+        if (ready) {
+            // Scheduler: throttle to micro_command_rate_hz / micro_min_period_s.
             const double elapsed = now_s - last_command_sent_s_;
             const double period_floor =
                 std::max(cfg_.micro_min_period_s,
                          1.0 / std::max(cfg_.micro_command_rate_hz, 0.1));
+
+            // PURSUIT mode: recompute desired_target_pose_ every tick.
+            // (Independent of scheduler - tracks the operator continuously.)
+            if (cfg_.micro_pursuit_enabled) {
+                // Recover the raw hand displacement from cmd.linear_velocity.
+                // The state machine emits  cmd.linear_velocity = position_scale
+                // * hand_displacement, so dividing back recovers the geometric
+                // hand delta the operator is showing.
+                const double inv_pos = (cfg_.position_scale    > 1e-6)
+                                     ? 1.0 / cfg_.position_scale    : 0.0;
+                const double inv_rot = (cfg_.orientation_scale > 1e-6)
+                                     ? 1.0 / cfg_.orientation_scale : 0.0;
+                const double r       = cfg_.micro_hand_to_robot_ratio;
+
+                desired_target_pose_.x  = active_entry_robot_pose_.x
+                    + r * cmd.linear_velocity[0]  * inv_pos;
+                desired_target_pose_.y  = active_entry_robot_pose_.y
+                    + r * cmd.linear_velocity[1]  * inv_pos;
+                desired_target_pose_.z  = active_entry_robot_pose_.z
+                    + r * cmd.linear_velocity[2]  * inv_pos;
+                desired_target_pose_.rx = active_entry_robot_pose_.rx
+                    + r * cmd.angular_velocity[0] * inv_rot;
+                desired_target_pose_.ry = active_entry_robot_pose_.ry
+                    + r * cmd.angular_velocity[1] * inv_rot;
+                desired_target_pose_.rz = active_entry_robot_pose_.rz
+                    + r * cmd.angular_velocity[2] * inv_rot;
+            }
+
             if (elapsed < period_floor) {
-                // Too soon since last amovel - skip silently. No log:
-                // this happens on every tick between commands.
+                // Too soon since last amovel - skip. No log: 60 Hz spam.
+            } else if (cfg_.micro_pursuit_enabled) {
+                // --- PURSUIT step ---------------------------------------
+                const double sx  = computeStep(
+                    desired_target_pose_.x  - last_commanded_target_pose_.x,
+                    cfg_.micro_min_step_xyz_mm, cfg_.micro_max_step_xyz_mm,
+                    cfg_.micro_arrival_band_xyz_mm);
+                const double sy  = computeStep(
+                    desired_target_pose_.y  - last_commanded_target_pose_.y,
+                    cfg_.micro_min_step_xyz_mm, cfg_.micro_max_step_xyz_mm,
+                    cfg_.micro_arrival_band_xyz_mm);
+                const double sz  = computeStep(
+                    desired_target_pose_.z  - last_commanded_target_pose_.z,
+                    cfg_.micro_min_step_xyz_mm, cfg_.micro_max_step_xyz_mm,
+                    cfg_.micro_arrival_band_xyz_mm);
+                const double srx = computeStep(
+                    desired_target_pose_.rx - last_commanded_target_pose_.rx,
+                    cfg_.micro_min_step_rot_deg, cfg_.micro_max_step_rot_deg,
+                    cfg_.micro_arrival_band_rot_deg);
+                const double sry = computeStep(
+                    desired_target_pose_.ry - last_commanded_target_pose_.ry,
+                    cfg_.micro_min_step_rot_deg, cfg_.micro_max_step_rot_deg,
+                    cfg_.micro_arrival_band_rot_deg);
+                const double srz = computeStep(
+                    desired_target_pose_.rz - last_commanded_target_pose_.rz,
+                    cfg_.micro_min_step_rot_deg, cfg_.micro_max_step_rot_deg,
+                    cfg_.micro_arrival_band_rot_deg);
+
+                const bool any_step =
+                    sx != 0.0 || sy != 0.0 || sz != 0.0 ||
+                    srx != 0.0 || sry != 0.0 || srz != 0.0;
+
+                if (any_step) {
+                    RobotPose pursuit_target = last_commanded_target_pose_;
+                    pursuit_target.x  += sx;
+                    pursuit_target.y  += sy;
+                    pursuit_target.z  += sz;
+                    pursuit_target.rx += srx;
+                    pursuit_target.ry += sry;
+                    pursuit_target.rz += srz;
+
+                    // Adaptive blending: shrink the requested radius on
+                    // a small segment so the controller doesn't try to
+                    // round more than the segment itself.
+                    const double seg_norm =
+                        std::sqrt(sx*sx + sy*sy + sz*sz);
+                    const double radius = cfg_.micro_blending_enabled
+                        ? std::min(cfg_.micro_blending_radius_mm,
+                                   0.4 * seg_norm)
+                        : 0.0;
+
+                    if (robot_.sendCartesianMicroMove(
+                            pursuit_target,
+                            cfg_.micro_lin_vel, cfg_.micro_ang_vel,
+                            cfg_.micro_lin_acc, cfg_.micro_ang_acc,
+                            radius)) {
+                        last_commanded_target_pose_ = pursuit_target;
+                        last_command_sent_s_        = now_s;
+                    } else {
+                        LOG_W("Pursuit micro-move refused by adapter: %s",
+                              robot_.lastError().c_str());
+                    }
+                }
+                // else: within arrival band on every axis -> nothing to do.
             } else {
-                // Integrate gesture velocity over the elapsed window
-                // into a per-command delta, then bound it.
+                // --- LEGACY incremental mode ---------------------------
                 std::array<double, 6> twist = {
                     cmd.linear_velocity[0],  cmd.linear_velocity[1],  cmd.linear_velocity[2],
                     cmd.angular_velocity[0], cmd.angular_velocity[1], cmd.angular_velocity[2]
                 };
-                guard_.clampSpeed(twist);    // hard caps, no pose
+                guard_.clampSpeed(twist);
 
                 auto bound = [](double v, double m) {
                     if (v >  m) return  m;
@@ -246,33 +386,21 @@ void Application::tick(double now_s) {
                     std::abs(dry) > cfg_.micro_deadband_deg ||
                     std::abs(drz) > cfg_.micro_deadband_deg;
 
-                if (!meaningful) {
-                    // Hand essentially still. Hold the virtual target;
-                    // do not issue a command. (Don't update
-                    // last_command_sent_s_ either, so the next non-
-                    // trivial gesture can fire immediately.)
-                } else {
+                if (meaningful) {
                     virtual_target_pose_.x  += dx;
                     virtual_target_pose_.y  += dy;
                     virtual_target_pose_.z  += dz;
                     virtual_target_pose_.rx += drx;
                     virtual_target_pose_.ry += dry;
                     virtual_target_pose_.rz += drz;
-
-                    const double blend_radius_mm = cfg_.micro_blending_enabled ? cfg_.micro_blending_radius_mm : 0.0;
+                    const double radius = cfg_.micro_blending_enabled
+                                        ? cfg_.micro_blending_radius_mm : 0.0;
                     if (robot_.sendCartesianMicroMove(
                             virtual_target_pose_,
                             cfg_.micro_lin_vel, cfg_.micro_ang_vel,
                             cfg_.micro_lin_acc, cfg_.micro_ang_acc,
-                            blend_radius_mm, cfg_.micro_blending_type)) {
+                            radius)) {
                         last_command_sent_s_ = now_s;
-                        LOG_D("Micro-move accepted: dXYZ=[%.2f %.2f %.2f] "
-                              "dRot=[%.2f %.2f %.2f] target=[%.1f %.1f %.1f / "
-                              "%.1f %.1f %.1f].",
-                              dx, dy, dz, drx, dry, drz,
-                              virtual_target_pose_.x, virtual_target_pose_.y,
-                              virtual_target_pose_.z, virtual_target_pose_.rx,
-                              virtual_target_pose_.ry, virtual_target_pose_.rz);
                     } else {
                         LOG_W("Micro-move refused by adapter: %s",
                               robot_.lastError().c_str());
@@ -284,14 +412,16 @@ void Application::tick(double now_s) {
     } else if (prev_active) {
         // Falling edge active -> passive. Per the supervisor design we
         // simply STOP issuing new amovels. The last in-flight short
-        // motion completes naturally (~100 ms) and the controller halts
-        // smoothly at its end pose. NO stopMotion(), NO speedl(0), NO
+        // motion completes naturally and the controller halts smoothly
+        // at its end pose. NO stopMotion(), NO speedl(0), NO
         // emergencyStop, NO mwait.
         LOG_I("State %s -> %s : ceasing micro-motion stream "
               "(last in-flight amovel will run to completion).",
               stateName(prev_state_), stateName(cur_state));
-        virtual_target_initialised_ = false;
-        fault_emergency_issued_     = false;
+        virtual_target_initialised_    = false;
+        active_entry_robot_pose_valid_ = false;
+        last_commanded_target_valid_   = false;
+        fault_emergency_issued_        = false;
     } else {
         // Passive -> passive (stable). Do NOT touch the robot.
         fault_emergency_issued_ = critical ? fault_emergency_issued_ : false;

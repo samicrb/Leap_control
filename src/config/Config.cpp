@@ -156,6 +156,19 @@ bool loadConfig(const std::string& path, Config& c) {
     c.micro_blending_radius_mm = dGet("robot.micro_blending_radius_mm", c.micro_blending_radius_mm);
     c.micro_blending_type = sGet("robot.micro_blending_type", c.micro_blending_type);
 
+    c.micro_blending_enabled   = bGet("robot.micro_blending_enabled",   c.micro_blending_enabled);
+    c.micro_blending_radius_mm = dGet("robot.micro_blending_radius_mm", c.micro_blending_radius_mm);
+    c.micro_blending_type      = sGet("robot.micro_blending_type",      c.micro_blending_type);
+
+    c.micro_pursuit_enabled      = bGet("robot.micro_pursuit_enabled",      c.micro_pursuit_enabled);
+    c.micro_hand_to_robot_ratio  = dGet("robot.micro_hand_to_robot_ratio",  c.micro_hand_to_robot_ratio);
+    c.micro_min_step_xyz_mm      = dGet("robot.micro_min_step_xyz_mm",      c.micro_min_step_xyz_mm);
+    c.micro_max_step_xyz_mm      = dGet("robot.micro_max_step_xyz_mm",      c.micro_max_step_xyz_mm);
+    c.micro_min_step_rot_deg     = dGet("robot.micro_min_step_rot_deg",     c.micro_min_step_rot_deg);
+    c.micro_max_step_rot_deg     = dGet("robot.micro_max_step_rot_deg",     c.micro_max_step_rot_deg);
+    c.micro_arrival_band_xyz_mm  = dGet("robot.micro_arrival_band_xyz_mm",  c.micro_arrival_band_xyz_mm);
+    c.micro_arrival_band_rot_deg = dGet("robot.micro_arrival_band_rot_deg", c.micro_arrival_band_rot_deg);
+
     LOG_I("Config loaded from %s (%zu keys)", path.c_str(), kv.size());
     return true;
 }
