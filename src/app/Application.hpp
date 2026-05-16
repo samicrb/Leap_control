@@ -1,9 +1,12 @@
 #pragma once
 
 #include "config/Config.hpp"
+#include "config/RuntimeConfigReloader.hpp"
 #include "gesture/GestureInterpreter.hpp"
 #include "gripper/IGripperController.hpp"
 #include "input/IExternalButton.hpp"
+#include "logging/EventLogger.hpp"
+#include "logging/MotionLogger.hpp"
 #include "robot/IRobotController.hpp"
 #include "robot/WorkspaceGuard.hpp"
 #include "sensor/ILeapSource.hpp"
@@ -13,6 +16,7 @@
 #include <atomic>
 #include <array>
 #include <memory>
+#include <string>
 
 namespace dgd {
 
@@ -20,11 +24,17 @@ namespace dgd {
 // whole thing can be driven by mocks in a test binary.
 class Application {
 public:
-    Application(const Config& cfg,
+    // The Config is taken by non-const reference so the runtime reloader
+    // can mutate whitelisted fields in place from inside the tick loop.
+    // All other consumers still see a const reference and never observe
+    // partial writes (changes are committed once per poll, between two
+    // ticks).
+    Application(Config&            cfg,
                 ILeapSource&       sensor,
                 IRobotController&  robot,
                 IGripperController& gripper,
-                IExternalButton&   button);
+                IExternalButton&   button,
+                std::string        config_path = "demo_config.ini");
 
     // Prepares everything for the first tick. Moves the robot home.
     bool initialise();
@@ -39,8 +49,10 @@ public:
 private:
     void tick(double now_s);
     double loopPeriod() const { return 1.0 / static_cast<double>(cfg_.loop_rate_hz); }
+    void rebindLoggingIfNeeded();
+    void emitConsoleSummary(double now_s, bool cur_active);
 
-    const Config&      cfg_;
+    Config&            cfg_;
     ILeapSource&       sensor_;
     IRobotController&  robot_;
     IGripperController& gripper_;
@@ -50,6 +62,23 @@ private:
     StateMachine       sm_;
     WorkspaceGuard     guard_;
     ConsoleUI          ui_;
+
+    // Diagnostic + tuning sidecar. None of these touch the robot path
+    // when their respective config flag is false.
+    MotionLogger             motion_logger_;
+    EventLogger              event_logger_;
+    RuntimeConfigReloader    reloader_;
+    std::string              config_path_;
+    bool                     logging_was_enabled_     = false;
+    bool                     motion_csv_was_enabled_  = false;
+    bool                     event_log_was_enabled_   = false;
+    std::string              prior_log_directory_;
+    std::string              prior_experiment_name_;
+    double                   last_tick_s_             = 0.0;
+    double                   last_summary_s_          = 0.0;
+    int                      sent_in_window_          = 0;
+    int                      skipped_in_window_       = 0;
+    double                   summary_window_start_s_  = 0.0;
 
     HandFrame          last_frame_{};
     std::atomic<bool>  running_{false};

@@ -183,6 +183,40 @@ struct Config {
     // using the same accel / jerk limits. NO speedl, NO stopMotion - the
     // tail ticks are still amovels with shrinking velocity targets.
     double micro_stop_ramp_time_s        = 0.18;
+
+    // --- Motion logging (CSV + event log) ---------------------------------
+    // When logging_enabled = false, no files are opened and the logging
+    // hooks are zero-cost in the active path.
+    bool        logging_enabled              = false;
+    std::string logging_directory            = "logs";
+    std::string logging_experiment_name      = "default_test";
+    bool        logging_motion_csv_enabled   = true;
+    bool        logging_event_log_enabled    = true;
+    int         logging_flush_every_n        = 20;
+    bool        logging_only_when_active     = true;
+    // If true, the motion CSV samples include the robot's actual TCP pose.
+    // The active path NEVER polls getCurrentPose() - the last cached pose
+    // (refreshed only while !active) is used. Outside active mode the cache
+    // is refreshed every 0.5 s, so this is effectively always available.
+    bool        logging_include_actual_pose  = true;
+
+    // --- Runtime config hot-reload ---------------------------------------
+    // When runtime_tuning_enabled = false, the config file is not watched
+    // and the program behaves exactly as before (single load at start).
+    bool runtime_tuning_enabled                 = false;
+    bool runtime_tuning_watch_config_file       = true;
+    int  runtime_tuning_poll_interval_ms        = 500;
+    bool runtime_tuning_print_changes_to_console = true;
+    bool runtime_tuning_log_changes_to_event_file = true;
+    bool runtime_tuning_apply_only_whitelisted  = true;
+    bool runtime_tuning_reject_invalid_values   = true;
+
+    // --- Debug / console summary -----------------------------------------
+    // Compact periodic console summary independent of the ConsoleUI render
+    // (which clears the screen). Useful for tuning without opening logs.
+    bool   debug_print_motion_summary = false;
+    double debug_summary_period_s     = 1.0;
+    bool   debug_verbose_robot_commands = false;
 };
 
 // Loads config from disk. Missing keys keep their defaults. Returns true

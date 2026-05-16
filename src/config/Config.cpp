@@ -36,6 +36,89 @@ int parseInt(const std::string& v, int fallback) {
 
 } // namespace
 
+namespace {
+
+// Reorganized demo_config.ini uses [section] headers. The canonical keys
+// the rest of the code reads (e.g. robot.micro_command_rate_hz) are kept
+// for backward compatibility; the table below maps the new section.key
+// form back to the canonical flat key. A new-form value wins over an
+// old-form one ONLY if the canonical key is not already set explicitly.
+struct Alias { const char* from; const char* to; };
+
+const Alias kAliases[] = {
+    // [leap]
+    {"leap.min_confidence",        "gesture.min_confidence"},
+    {"leap.hand_loss_timeout_s",   "gesture.hand_loss_timeout_s"},
+    {"leap.posture_hold_s",        "gesture.posture_hold_s"},
+    {"leap.grab_closed_threshold", "gesture.grab_closed_threshold"},
+    {"leap.grab_open_threshold",   "gesture.grab_open_threshold"},
+
+    // [robot_connection]
+    {"robot_connection.ip",                "robot.ip"},
+    {"robot_connection.port",              "robot.port"},
+    {"robot_connection.model",             "robot.model"},
+    {"robot_connection.connect_timeout_s", "robot.connect_timeout_s"},
+    {"robot_connection.skip_move_home",    "robot.skip_move_home"},
+
+    // [safety]
+    {"safety.collision_sensitivity", "robot.collision_sensitivity"},
+    {"safety.singularity_handling",  "robot.singularity_handling"},
+    {"safety.home_use_movejx",       "robot.home_use_movejx"},
+    {"safety.auto_reset_safety",     "robot.auto_reset_safety"},
+
+    // [motion_mapping]
+    {"motion_mapping.position_scale",          "motion.position_scale"},
+    {"motion_mapping.orientation_scale",       "motion.orientation_scale"},
+    {"motion_mapping.position_deadzone_mm",    "motion.position_deadzone_mm"},
+    {"motion_mapping.orientation_deadzone_deg","motion.orientation_deadzone_deg"},
+    {"motion_mapping.sign_x",  "motion.sign_x"},
+    {"motion_mapping.sign_y",  "motion.sign_y"},
+    {"motion_mapping.sign_z",  "motion.sign_z"},
+    {"motion_mapping.sign_rx", "motion.sign_rx"},
+    {"motion_mapping.sign_ry", "motion.sign_ry"},
+    {"motion_mapping.sign_rz", "motion.sign_rz"},
+
+    // [motion_smoothing]
+    {"motion_smoothing.smoothing_alpha", "motion.smoothing_alpha"},
+
+    // [micro_pursuit]
+    {"micro_pursuit.enabled",             "robot.micro_pursuit_enabled"},
+    {"micro_pursuit.hand_to_robot_ratio", "robot.micro_hand_to_robot_ratio"},
+    {"micro_pursuit.min_step_xyz_mm",     "robot.micro_min_step_xyz_mm"},
+    {"micro_pursuit.max_step_xyz_mm",     "robot.micro_max_step_xyz_mm"},
+    {"micro_pursuit.min_step_rot_deg",    "robot.micro_min_step_rot_deg"},
+    {"micro_pursuit.max_step_rot_deg",    "robot.micro_max_step_rot_deg"},
+    {"micro_pursuit.arrival_band_xyz_mm", "robot.micro_arrival_band_xyz_mm"},
+    {"micro_pursuit.arrival_band_rot_deg","robot.micro_arrival_band_rot_deg"},
+
+    // [robot_command]
+    {"robot_command.micro_command_rate_hz","robot.micro_command_rate_hz"},
+    {"robot_command.micro_min_period_s",   "robot.micro_min_period_s"},
+    {"robot_command.micro_lin_vel",        "robot.micro_lin_vel"},
+    {"robot_command.micro_ang_vel",        "robot.micro_ang_vel"},
+    {"robot_command.micro_lin_acc",        "robot.micro_lin_acc"},
+    {"robot_command.micro_ang_acc",        "robot.micro_ang_acc"},
+    {"robot_command.micro_min_step_xyz_mm","robot.micro_min_step_xyz_mm"},
+    {"robot_command.micro_max_step_xyz_mm","robot.micro_max_step_xyz_mm"},
+    {"robot_command.micro_min_step_rot_deg","robot.micro_min_step_rot_deg"},
+    {"robot_command.micro_max_step_rot_deg","robot.micro_max_step_rot_deg"},
+
+    // [blending]
+    {"blending.enabled",   "robot.micro_blending_enabled"},
+    {"blending.radius_mm", "robot.micro_blending_radius_mm"},
+    {"blending.type",      "robot.micro_blending_type"},
+
+    // [velocity_filter]
+    {"velocity_filter.enabled",        "robot.micro_velocity_filter_enabled"},
+    {"velocity_filter.alpha",          "robot.micro_velocity_filter_alpha"},
+    {"velocity_filter.max_jerk_xyz",   "robot.micro_max_jerk_xyz"},
+    {"velocity_filter.max_jerk_rot",   "robot.micro_max_jerk_rot"},
+    {"velocity_filter.deadband_mm_s",  "robot.micro_velocity_deadband_mm_s"},
+    {"velocity_filter.stop_ramp_time_s","robot.micro_stop_ramp_time_s"},
+};
+
+} // namespace
+
 bool loadConfig(const std::string& path, Config& c) {
     std::ifstream in(path);
     if (!in) {
@@ -43,16 +126,46 @@ bool loadConfig(const std::string& path, Config& c) {
         return false;
     }
 
+    // Parse the file in two flavours:
+    //   - canonical flat keys of the form "namespace.key" win
+    //   - "[section] key=value" lines are translated to "section.key";
+    //     the alias table above maps a few of those to canonical names
+    //     so the existing code paths keep working.
     std::unordered_map<std::string, std::string> kv;
     std::string line;
+    std::string current_section;
     while (std::getline(in, line)) {
         auto hash = line.find('#');
         if (hash != std::string::npos) line = line.substr(0, hash);
+        std::string stripped = trim(line);
+        if (stripped.empty()) continue;
+        if (stripped.front() == '[' && stripped.back() == ']') {
+            current_section = trim(stripped.substr(1, stripped.size() - 2));
+            continue;
+        }
         auto eq = line.find('=');
         if (eq == std::string::npos) continue;
         std::string k = trim(line.substr(0, eq));
         std::string v = trim(line.substr(eq + 1));
-        if (!k.empty()) kv[k] = v;
+        if (k.empty()) continue;
+        // Bare key under an active section is stored as "section.key".
+        // If the key already contains a dot the user gave a canonical
+        // name; keep it as-is so existing INIs keep loading unchanged.
+        if (!current_section.empty() && k.find('.') == std::string::npos) {
+            k = current_section + "." + k;
+        }
+        kv[k] = v;
+    }
+
+    // Promote new-form (section.key) values to their canonical flat keys
+    // when the canonical name was not explicitly provided. Old keys win:
+    // this keeps existing demo_config.ini files behaving identically.
+    for (const auto& a : kAliases) {
+        auto it_from = kv.find(a.from);
+        if (it_from == kv.end()) continue;
+        if (kv.find(a.to) == kv.end()) {
+            kv[a.to] = it_from->second;
+        }
     }
 
     auto sGet = [&](const std::string& k, const std::string& fallback) {
@@ -175,6 +288,35 @@ bool loadConfig(const std::string& path, Config& c) {
     c.micro_max_jerk_rot            = dGet("robot.micro_max_jerk_rot",            c.micro_max_jerk_rot);
     c.micro_velocity_deadband_mm_s  = dGet("robot.micro_velocity_deadband_mm_s",  c.micro_velocity_deadband_mm_s);
     c.micro_stop_ramp_time_s        = dGet("robot.micro_stop_ramp_time_s",        c.micro_stop_ramp_time_s);
+
+    c.logging_enabled             = bGet("logging.enabled",              c.logging_enabled);
+    c.logging_directory           = sGet("logging.log_directory",        c.logging_directory);
+    c.logging_experiment_name     = sGet("logging.experiment_name",      c.logging_experiment_name);
+    c.logging_motion_csv_enabled  = bGet("logging.motion_csv_enabled",   c.logging_motion_csv_enabled);
+    c.logging_event_log_enabled   = bGet("logging.event_log_enabled",    c.logging_event_log_enabled);
+    c.logging_flush_every_n       = iGet("logging.flush_every_n_samples",c.logging_flush_every_n);
+    c.logging_only_when_active    = bGet("logging.log_only_when_active", c.logging_only_when_active);
+    c.logging_include_actual_pose = bGet("logging.include_robot_actual_pose",
+                                         c.logging_include_actual_pose);
+
+    c.runtime_tuning_enabled                  = bGet("runtime_tuning.enabled",
+                                                     c.runtime_tuning_enabled);
+    c.runtime_tuning_watch_config_file        = bGet("runtime_tuning.watch_config_file",
+                                                     c.runtime_tuning_watch_config_file);
+    c.runtime_tuning_poll_interval_ms         = iGet("runtime_tuning.poll_interval_ms",
+                                                     c.runtime_tuning_poll_interval_ms);
+    c.runtime_tuning_print_changes_to_console = bGet("runtime_tuning.print_changes_to_console",
+                                                     c.runtime_tuning_print_changes_to_console);
+    c.runtime_tuning_log_changes_to_event_file= bGet("runtime_tuning.log_changes_to_event_file",
+                                                     c.runtime_tuning_log_changes_to_event_file);
+    c.runtime_tuning_apply_only_whitelisted   = bGet("runtime_tuning.apply_only_whitelisted_parameters",
+                                                     c.runtime_tuning_apply_only_whitelisted);
+    c.runtime_tuning_reject_invalid_values    = bGet("runtime_tuning.reject_invalid_values",
+                                                     c.runtime_tuning_reject_invalid_values);
+
+    c.debug_print_motion_summary  = bGet("debug.print_motion_summary",  c.debug_print_motion_summary);
+    c.debug_summary_period_s      = dGet("debug.summary_period_s",      c.debug_summary_period_s);
+    c.debug_verbose_robot_commands= bGet("debug.verbose_robot_commands",c.debug_verbose_robot_commands);
 
     LOG_I("Config loaded from %s (%zu keys)", path.c_str(), kv.size());
     return true;

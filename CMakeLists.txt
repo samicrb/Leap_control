@@ -49,6 +49,7 @@ set(APP_SOURCES
     src/main.cpp
     src/app/Application.cpp
     src/config/Config.cpp
+    src/config/RuntimeConfigReloader.cpp
     src/sensor/LeapSource.cpp
     src/gesture/GestureInterpreter.cpp
     src/state/StateMachine.cpp
@@ -56,6 +57,8 @@ set(APP_SOURCES
     src/robot/WorkspaceGuard.cpp
     src/gripper/ToolIoGripperController.cpp
     src/input/KeyboardButton.cpp
+    src/logging/EventLogger.cpp
+    src/logging/MotionLogger.cpp
     src/ui/ConsoleUI.cpp
     src/util/Logger.cpp
 )

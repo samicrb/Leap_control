@@ -1,10 +1,14 @@
 #include "app/Application.hpp"
 #include "input/KeyboardButton.hpp"
 #include "util/Logger.hpp"
+#include "util/MathUtils.hpp"
 
 #include <cmath>
 #include <chrono>
+#include <cstdio>
+#include <optional>
 #include <thread>
+#include <utility>
 
 namespace dgd {
 
@@ -73,19 +77,37 @@ double limitDelta(double v_new, double v_prev, double cap) {
 
 } // namespace
 
-Application::Application(const Config& cfg,
+Application::Application(Config& cfg,
                          ILeapSource& sensor,
                          IRobotController& robot,
                          IGripperController& gripper,
-                         IExternalButton& button)
+                         IExternalButton& button,
+                         std::string config_path)
     : cfg_(cfg), sensor_(sensor), robot_(robot), gripper_(gripper), button_(button),
       interpreter_(cfg),
       sm_(cfg),
       guard_(cfg, {cfg.safe_x, cfg.safe_y, cfg.safe_z, cfg.safe_rx, cfg.safe_ry, cfg.safe_rz}),
-      ui_(cfg) {}
+      ui_(cfg),
+      config_path_(std::move(config_path)) {}
 
 bool Application::initialise() {
     LOG_I("Application: initialising.");
+
+    rebindLoggingIfNeeded();
+    if (cfg_.runtime_tuning_enabled) {
+        reloader_.attach(config_path_, cfg_,
+            [this](const std::string& msg) {
+                if (cfg_.runtime_tuning_log_changes_to_event_file) {
+                    event_logger_.event(msg, false);
+                }
+                if (cfg_.runtime_tuning_print_changes_to_console) {
+                    std::fprintf(stderr, "[TUNE] %s\n", msg.c_str());
+                }
+            });
+        event_logger_.event("Runtime tuning enabled (watching " + config_path_ + ")");
+    }
+    event_logger_.event("Program started",
+                        cfg_.runtime_tuning_print_changes_to_console);
 
     if (!sensor_.start()) {
         LOG_W("Sensor did not start cleanly - continuing in degraded mode.");
@@ -143,6 +165,8 @@ int Application::run() {
     }
 
     LOG_I("Application: exiting main loop.");
+    event_logger_.event("Program shutdown",
+                        cfg_.runtime_tuning_print_changes_to_console);
     // Normal shutdown path: just disconnect. The adapter's disconnect()
     // chains to disengage() -> stopMotion() (soft speedl-zero) and then
     // close_connection() which frees DRFL access authority cleanly. We
@@ -153,10 +177,92 @@ int Application::run() {
     gripper_.disconnect();
     sensor_.stop();
     button_.stop();
+    motion_logger_.close();
+    event_logger_.close();
+    reloader_.detach();
     return 0;
 }
 
+void Application::rebindLoggingIfNeeded() {
+    // Open / close the loggers to match the current cfg state. Called
+    // once at startup and again whenever a hot-reload flips any of the
+    // top-level enable flags. NEVER fails the control loop on its own.
+    const bool need_motion = cfg_.logging_enabled && cfg_.logging_motion_csv_enabled;
+    const bool need_event  = cfg_.logging_enabled && cfg_.logging_event_log_enabled;
+
+    const bool experiment_changed =
+        (prior_log_directory_  != cfg_.logging_directory) ||
+        (prior_experiment_name_ != cfg_.logging_experiment_name);
+
+    if (need_motion) {
+        const bool reopen = !motion_logger_.isOpen() || experiment_changed ||
+                            !motion_csv_was_enabled_;
+        if (reopen) motion_logger_.open(cfg_);
+    } else if (motion_logger_.isOpen()) {
+        motion_logger_.close();
+    }
+
+    if (need_event) {
+        const bool reopen = !event_logger_.isOpen() || experiment_changed ||
+                            !event_log_was_enabled_;
+        if (reopen) event_logger_.open(cfg_);
+    } else if (event_logger_.isOpen()) {
+        event_logger_.close();
+    }
+
+    logging_was_enabled_    = cfg_.logging_enabled;
+    motion_csv_was_enabled_ = cfg_.logging_motion_csv_enabled;
+    event_log_was_enabled_  = cfg_.logging_event_log_enabled;
+    prior_log_directory_    = cfg_.logging_directory;
+    prior_experiment_name_  = cfg_.logging_experiment_name;
+}
+
+void Application::emitConsoleSummary(double now_s, bool cur_active) {
+    if (!cfg_.debug_print_motion_summary) return;
+    if (summary_window_start_s_ <= 0.0) summary_window_start_s_ = now_s;
+    const double period = std::max(cfg_.debug_summary_period_s, 0.1);
+    if (now_s - last_summary_s_ < period) return;
+
+    const double elapsed = std::max(now_s - summary_window_start_s_, 1e-3);
+    const double sent_hz    = sent_in_window_    / elapsed;
+    const double skip_hz    = skipped_in_window_ / elapsed;
+    const double eff_scale  = cfg_.position_scale *
+                              (cfg_.micro_pursuit_enabled
+                                  ? cfg_.micro_hand_to_robot_ratio : 1.0);
+    std::fprintf(stderr,
+        "[RUN] active=%d tracking=%d sent=%.1f/s skipped=%.1f/s "
+        "scale=%.2f vel=%.0f acc=%.0f step=%.1f blend=%.1f smooth=%.2f\n",
+        cur_active ? 1 : 0,
+        last_frame_.sensor_connected ? 1 : 0,
+        sent_hz, skip_hz, eff_scale,
+        cfg_.micro_lin_vel, cfg_.micro_lin_acc,
+        cfg_.micro_max_step_xyz_mm,
+        cfg_.micro_blending_enabled ? cfg_.micro_blending_radius_mm : 0.0,
+        cfg_.smoothing_alpha);
+
+    last_summary_s_         = now_s;
+    summary_window_start_s_ = now_s;
+    sent_in_window_         = 0;
+    skipped_in_window_      = 0;
+}
+
 void Application::tick(double now_s) {
+    // 0. Hot-reload pass. Reads .ini mtime at most once per poll
+    //    interval; reparses only on a real change. Mutations are
+    //    committed in this single call so no other code observes a
+    //    half-updated Config struct.
+    if (cfg_.runtime_tuning_enabled) {
+        if (reloader_.poll(now_s)) {
+            rebindLoggingIfNeeded();
+        }
+    }
+
+    const double dt_ms = (last_tick_s_ > 0.0)
+                       ? (now_s - last_tick_s_) * 1000.0 : 0.0;
+    last_tick_s_ = now_s;
+
+    const bool prev_sensor = last_frame_.sensor_connected;
+
     // 1. Pull the latest frame. If nothing new, use the prior one but
     //    mark it as stale (sensor_connected stays, but freshness field
     //    in the report still reflects reality).
@@ -168,12 +274,25 @@ void Application::tick(double now_s) {
     }
     last_frame_ = frame;
 
+    if (prev_sensor != frame.sensor_connected) {
+        event_logger_.event(frame.sensor_connected
+                                ? "Tracking recovered"
+                                : "Tracking lost: freezing motion",
+                            cfg_.runtime_tuning_print_changes_to_console);
+    }
+
     // 2. Gesture interpretation.
     GestureReport report = interpreter_.update(frame, now_s);
     report.freshFrame = fresh;
 
     // 3. State machine.
+    static bool prev_btn = false;
     bool btn = button_.isActive();
+    if (btn != prev_btn) {
+        event_logger_.event(btn ? "Deadman pressed" : "Deadman released",
+                            cfg_.runtime_tuning_print_changes_to_console);
+        prev_btn = btn;
+    }
     CommandOutput cmd = sm_.step(report, btn, now_s);
 
     if (cmd.captureReference) interpreter_.captureReference();
@@ -193,6 +312,16 @@ void Application::tick(double now_s) {
                                     isCriticalFault(fault_now);
 
     bool touched_limit = false;
+
+    // Diagnostic accumulators - filled by the branches below so the
+    // motion CSV row carries exactly what the controller saw this tick.
+    bool        sample_command_sent = false;
+    const char* sample_skip_reason  = "";
+    std::optional<std::array<double, 6>> sample_desired_target;
+    std::optional<std::array<double, 6>> sample_last_commanded;
+    std::optional<std::array<double, 6>> sample_commanded_target;
+    double      sample_step_xyz = 0.0;
+    double      sample_step_rot = 0.0;
 
     if (critical && !fault_emergency_issued_) {
         // One-shot hard halt on entering a critical fault. Drops any
@@ -285,6 +414,10 @@ void Application::tick(double now_s) {
             ? (active_entry_robot_pose_valid_ && last_commanded_target_valid_)
             : virtual_target_initialised_;
 
+        if (!ready) {
+            sample_skip_reason = "not_ready";
+        }
+
         if (ready) {
             // Scheduler: throttle to micro_command_rate_hz / micro_min_period_s.
             const double elapsed = now_s - last_command_sent_s_;
@@ -325,8 +458,16 @@ void Application::tick(double now_s) {
                 desired_target_pose_ = last_commanded_target_pose_;
             }
 
+            if (last_commanded_target_valid_) {
+                sample_last_commanded = last_commanded_target_pose_.toArray();
+            }
+            if (cfg_.micro_pursuit_enabled || ramp_to_zero_) {
+                sample_desired_target = desired_target_pose_.toArray();
+            }
+
             if (elapsed < period_floor) {
                 // Too soon since last amovel - skip. No log: 60 Hz spam.
+                sample_skip_reason = "scheduler";
             } else if (cfg_.micro_pursuit_enabled &&
                        cfg_.micro_velocity_filter_enabled) {
                 // --- PURSUIT + VELOCITY-SMOOTHED step ----------------
@@ -477,10 +618,21 @@ void Application::tick(double now_s) {
                             radius)) {
                         last_commanded_target_pose_ = pursuit_target;
                         last_command_sent_s_        = now_s;
+                        sample_command_sent     = true;
+                        sample_commanded_target = pursuit_target.toArray();
+                        sample_step_xyz = seg_norm;
+                        sample_step_rot = std::sqrt(v_filt[3]*v_filt[3]*dt*dt +
+                                                    v_filt[4]*v_filt[4]*dt*dt +
+                                                    v_filt[5]*v_filt[5]*dt*dt);
                     } else {
                         LOG_W("Pursuit-velocity micro-move refused: %s",
                               robot_.lastError().c_str());
+                        sample_skip_reason = "robot_refused";
+                        event_logger_.event(std::string("Command skipped: robot refused (") +
+                                            robot_.lastError() + ")");
                     }
+                } else {
+                    sample_skip_reason = "velocity_deadband";
                 }
             } else if (cfg_.micro_pursuit_enabled) {
                 // --- PURSUIT step (legacy position-step path) -----------
@@ -527,6 +679,8 @@ void Application::tick(double now_s) {
                     // round more than the segment itself.
                     const double seg_norm =
                         std::sqrt(sx*sx + sy*sy + sz*sz);
+                    const double rot_norm =
+                        std::sqrt(srx*srx + sry*sry + srz*srz);
                     const double radius = cfg_.micro_blending_enabled
                         ? std::min(cfg_.micro_blending_radius_mm,
                                    0.4 * seg_norm)
@@ -539,10 +693,19 @@ void Application::tick(double now_s) {
                             radius)) {
                         last_commanded_target_pose_ = pursuit_target;
                         last_command_sent_s_        = now_s;
+                        sample_command_sent     = true;
+                        sample_commanded_target = pursuit_target.toArray();
+                        sample_step_xyz = seg_norm;
+                        sample_step_rot = rot_norm;
                     } else {
                         LOG_W("Pursuit micro-move refused by adapter: %s",
                               robot_.lastError().c_str());
+                        sample_skip_reason = "robot_refused";
+                        event_logger_.event(std::string("Command skipped: robot refused (") +
+                                            robot_.lastError() + ")");
                     }
+                } else {
+                    sample_skip_reason = "arrival_band";
                 }
                 // else: within arrival band on every axis -> nothing to do.
             } else {
@@ -588,10 +751,19 @@ void Application::tick(double now_s) {
                             cfg_.micro_lin_acc, cfg_.micro_ang_acc,
                             radius)) {
                         last_command_sent_s_ = now_s;
+                        sample_command_sent     = true;
+                        sample_commanded_target = virtual_target_pose_.toArray();
+                        sample_step_xyz = std::sqrt(dx*dx + dy*dy + dz*dz);
+                        sample_step_rot = std::sqrt(drx*drx + dry*dry + drz*drz);
                     } else {
                         LOG_W("Micro-move refused by adapter: %s",
                               robot_.lastError().c_str());
+                        sample_skip_reason = "robot_refused";
+                        event_logger_.event(std::string("Command skipped: robot refused (") +
+                                            robot_.lastError() + ")");
                     }
+                } else {
+                    sample_skip_reason = "deadband";
                 }
             }
         }
@@ -627,10 +799,21 @@ void Application::tick(double now_s) {
         fault_emergency_issued_ = critical ? fault_emergency_issued_ : false;
     }
 
+    if (cur_state != prev_state_) {
+        event_logger_.event(std::string("State: ") + stateName(prev_state_) +
+                            " -> " + stateName(cur_state),
+                            cfg_.runtime_tuning_print_changes_to_console);
+    }
     prev_state_ = cur_state;
 
-    if (cmd.openGripper)  gripper_.open();
-    if (cmd.closeGripper) gripper_.close();
+    if (cmd.openGripper) {
+        event_logger_.event("Gripper IMPULSE: open");
+        gripper_.open();
+    }
+    if (cmd.closeGripper) {
+        event_logger_.event("Gripper IMPULSE: close");
+        gripper_.close();
+    }
 
     // 5. UI refresh.
     //    Pose lookup is gated: NEVER while the active micro-motion
@@ -645,6 +828,93 @@ void Application::tick(double now_s) {
             last_pose_poll_s_ = now_s;
         }
     }
+
+    // --- Motion CSV sample ------------------------------------------------
+    // Build a record only if logging is on AND (we want to log everywhere
+    // OR we're in an active control phase). Cost when off: a single bool
+    // branch.
+    if (motion_logger_.isOpen()) {
+        const bool log_this_tick =
+            !cfg_.logging_only_when_active || cur_active || ramp_to_zero_;
+        if (log_this_tick) {
+            MotionLogSample s;
+            s.timestamp_s   = now_s;
+            s.dt_ms         = dt_ms;
+            s.tracking_valid = report.sensor_ok && report.freshFrame;
+            s.deadman_active = btn;
+            s.control_mode   = stateName(cur_state);
+            s.command_sent   = sample_command_sent;
+            s.command_skip_reason = sample_skip_reason;
+
+            if (frame.right) {
+                s.hand_raw_pos = frame.right->palm_position;
+                // Cheap raw orientation estimate (extrinsic XYZ deg) from
+                // direction + normal so the CSV has a comparable column
+                // to hand_filtered_rot.
+                const auto& d = frame.right->palm_direction;
+                const auto& n = frame.right->palm_normal;
+                double yaw   = std::atan2(d[0], -d[2]) * kRad2Deg;
+                double pitch = (std::abs(d[0]) + std::abs(d[1]) + std::abs(d[2]) > 1e-6)
+                    ? std::asin(clamp(d[1], -1.0, 1.0)) * kRad2Deg : 0.0;
+                double roll  = std::atan2(n[0], -n[1]) * kRad2Deg;
+                s.hand_raw_rot = std::array<double, 3>{pitch, yaw, roll};
+            }
+            if (interpreter_.smootherPrimed()) {
+                s.hand_filtered_pos = interpreter_.smoothedRightPosition();
+                const auto& d = interpreter_.smoothedRightDirection();
+                const auto& n = interpreter_.smoothedRightNormal();
+                double yaw   = std::atan2(d[0], -d[2]) * kRad2Deg;
+                double pitch = std::asin(clamp(d[1], -1.0, 1.0)) * kRad2Deg;
+                double roll  = std::atan2(n[0], -n[1]) * kRad2Deg;
+                s.hand_filtered_rot = std::array<double, 3>{pitch, yaw, roll};
+            }
+            s.hand_delta_pos = report.rightDeltaPosition;
+            s.hand_delta_rot = report.rightDeltaOrientation;
+
+            s.desired_target  = sample_desired_target;
+            s.last_commanded  = sample_last_commanded;
+            s.commanded       = sample_commanded_target;
+            if (cfg_.logging_include_actual_pose) {
+                s.actual_robot = last_pose_for_ui_.toArray();
+            }
+
+            if (s.desired_target && s.last_commanded) {
+                const auto& d = *s.desired_target;
+                const auto& l = *s.last_commanded;
+                s.position_error_mm = std::sqrt(
+                    (d[0]-l[0])*(d[0]-l[0]) +
+                    (d[1]-l[1])*(d[1]-l[1]) +
+                    (d[2]-l[2])*(d[2]-l[2]));
+                s.rotation_error_deg = std::sqrt(
+                    (d[3]-l[3])*(d[3]-l[3]) +
+                    (d[4]-l[4])*(d[4]-l[4]) +
+                    (d[5]-l[5])*(d[5]-l[5]));
+            }
+            s.commanded_step_xyz_mm  = sample_step_xyz;
+            s.commanded_step_rot_deg = sample_step_rot;
+
+            s.micro_command_rate_hz    = cfg_.micro_command_rate_hz;
+            s.micro_min_period_s       = cfg_.micro_min_period_s;
+            s.micro_lin_vel            = cfg_.micro_lin_vel;
+            s.micro_lin_acc            = cfg_.micro_lin_acc;
+            s.micro_ang_vel            = cfg_.micro_ang_vel;
+            s.micro_ang_acc            = cfg_.micro_ang_acc;
+            s.micro_blending_enabled   = cfg_.micro_blending_enabled;
+            s.micro_blending_radius_mm = cfg_.micro_blending_radius_mm;
+            s.micro_pursuit_enabled    = cfg_.micro_pursuit_enabled;
+            s.micro_hand_to_robot_ratio= cfg_.micro_hand_to_robot_ratio;
+            s.motion_position_scale    = cfg_.position_scale;
+            s.motion_orientation_scale = cfg_.orientation_scale;
+            s.motion_smoothing_alpha   = cfg_.smoothing_alpha;
+
+            motion_logger_.append(s);
+        }
+    }
+
+    if (sample_command_sent)             ++sent_in_window_;
+    else if (sample_skip_reason[0] != '\0') ++skipped_in_window_;
+
+    emitConsoleSummary(now_s, cur_active);
 
     ConsoleUI::Frame uiframe;
     uiframe.state         = sm_.state();

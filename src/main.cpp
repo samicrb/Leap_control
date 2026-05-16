@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     dgd::ToolIoGripperController gripper(cfg, robot);
     dgd::KeyboardButton        button;
 
-    dgd::Application app(cfg, sensor, robot, gripper, button);
+    dgd::Application app(cfg, sensor, robot, gripper, button, config_path);
     g_app = &app;
 
     if (!app.initialise()) {
