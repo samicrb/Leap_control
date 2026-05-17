@@ -49,13 +49,21 @@ set(APP_SOURCES
     src/main.cpp
     src/app/Application.cpp
     src/config/Config.cpp
+    src/config/RuntimeConfigReloader.cpp
     src/sensor/LeapSource.cpp
     src/gesture/GestureInterpreter.cpp
     src/state/StateMachine.cpp
     src/robot/DrflRobotController.cpp
     src/robot/WorkspaceGuard.cpp
+    src/gripper/GripperFactory.cpp
+    src/gripper/NoopGripper.cpp
+    src/gripper/QbSoftHandIndustryGripper.cpp
     src/gripper/ToolIoGripperController.cpp
     src/input/KeyboardButton.cpp
+    src/logging/EventLogger.cpp
+    src/logging/MotionLogger.cpp
+    src/motion/IMotionBackend.cpp
+    src/motion/ServolMotionBackend.cpp
     src/ui/ConsoleUI.cpp
     src/util/Logger.cpp
 )
@@ -133,8 +141,43 @@ add_executable(state_machine_smoke_test
     src/util/Logger.cpp
 )
 target_include_directories(state_machine_smoke_test PRIVATE src)
+
+# Vector-norm limiter regression test (header-only target).
+add_executable(vector_norm_limiter_test
+    test/vector_norm_limiter_test.cpp
+)
+target_include_directories(vector_norm_limiter_test PRIVATE src)
+
+# Gripper factory selection test. Pulls in just the factory + the three
+# gripper backends; the robot adapter is replaced by an in-test stub so
+# no DRFL link is required.
+add_executable(gripper_factory_test
+    test/gripper_factory_test.cpp
+    src/gripper/GripperFactory.cpp
+    src/gripper/NoopGripper.cpp
+    src/gripper/QbSoftHandIndustryGripper.cpp
+    src/gripper/ToolIoGripperController.cpp
+    src/config/Config.cpp
+    src/util/Logger.cpp
+)
+target_include_directories(gripper_factory_test PRIVATE src)
+
+# Servol backend regression test. The backend talks to a recording
+# IRobotController so no DRFL link is required.
+add_executable(servol_backend_test
+    test/servol_backend_test.cpp
+    src/motion/IMotionBackend.cpp
+    src/motion/ServolMotionBackend.cpp
+    src/config/Config.cpp
+    src/util/Logger.cpp
+)
+target_include_directories(servol_backend_test PRIVATE src)
+
 enable_testing()
-add_test(NAME state_machine_smoke COMMAND state_machine_smoke_test)
+add_test(NAME state_machine_smoke      COMMAND state_machine_smoke_test)
+add_test(NAME vector_norm_limiter      COMMAND vector_norm_limiter_test)
+add_test(NAME gripper_factory          COMMAND gripper_factory_test)
+add_test(NAME servol_backend           COMMAND servol_backend_test)
 
 # Copy config next to binary so the demo can be launched directly.
 add_custom_command(TARGET doosan_gesture_demo POST_BUILD

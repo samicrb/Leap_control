@@ -28,14 +28,88 @@ public:
     // startup and after a fault). BLOCKING.
     virtual bool moveHome(const RobotPose& safe) = 0;
 
+    // Apply a TCP definition that ALREADY exists on the Doosan controller
+    // (created manually via the pendant / DART). The adapter wraps DRFL
+    // set_tcp(name). Returns false if the controller refuses (typically
+    // because the name does not exist). NEVER creates or modifies a TCP
+    // entry on the controller side. Empty `name` is a no-op success.
+    virtual bool setTcp(const std::string& name) {
+        (void)name; return true;
+    }
+
+    // Apply a Tool Weight definition that ALREADY exists on the Doosan
+    // controller. Wraps DRFL set_tool(name). Same contract as setTcp:
+    // does not create / modify controller-side entries; empty name is a
+    // no-op success.
+    virtual bool setToolWeight(const std::string& name) {
+        (void)name; return true;
+    }
+
     // --- Streaming control ---------------------------------------------
     // Request a Cartesian velocity (mm/s, deg/s) in the base frame.
     // Adapter is responsible for forwarding this to the robot's
     // realtime streaming primitive at the correct rate.
     virtual bool sendCartesianVelocity(const std::array<double, 6>& twist) = 0;
 
-    // Halt current motion immediately and safely. Must not throw.
+    // SOFT pause. Stream a zero Cartesian velocity so the controller
+    // decelerates smoothly to a stand-still and holds position.
+    // Idempotent and safe to call at the demo loop rate (60 Hz) -
+    // notably from passive states (IDLE / READY / RECENTER / GRIPPER).
+    // Must not throw.
     virtual void stopMotion() = 0;
+
+    // Discrete, NON-BLOCKING Cartesian micro-motion to a target pose.
+    // The adapter uses amovel(...) (async) and MUST NOT call mwait().
+    //
+    // This is the only motion primitive the Application's active loop is
+    // allowed to use during PositionControl / OrientationControl. The
+    // scheduler (Application) caps the issue rate and bounds the
+    // per-command step.
+    //
+    // blending_radius_mm: optional inter-segment blending radius. 0
+    // disables blending and the controller decelerates to a complete
+    // stop at the end of each segment. A small positive value (2..10
+    // mm) chains consecutive amovel segments smoothly. Some DRFL
+    // overloads of amovel(...) do not expose a radius parameter; the
+    // adapter is free to map it onto BLENDING_SPEED_TYPE instead. The
+    // caller MUST guarantee that no non-motion DRFL command is issued
+    // between two blended micro-motions (alarm 5.7056).
+    //
+    // vel/acc are scalar caps (mm/s, deg/s, mm/s^2, deg/s^2). Returns
+    // false if the command was refused / the link isn't ready.
+    virtual bool sendCartesianMicroMove(const RobotPose& target,
+                                        double lin_vel, double ang_vel,
+                                        double lin_acc, double ang_acc,
+                                        double blending_radius_mm = 0.0) = 0;
+
+    // Continuous task-space servo target update (Doosan SERVO-L /
+    // servol). Distinct from amovel: NOT a discrete planned move, NOT
+    // chained / blended. The controller continuously follows the most
+    // recent target delivered, bounded by velocity / acceleration caps.
+    //
+    // pose       : target in BASE frame (mm, deg, Doosan ZYZ' Euler)
+    // lin_vel    : task linear velocity cap (mm/s)
+    // ang_vel    : task angular velocity cap (deg/s)
+    // lin_acc    : task linear acceleration cap (mm/s^2)
+    // ang_acc    : task angular acceleration cap (deg/s^2)
+    // time_s     : reach time hint, <= 0 = controller default
+    //
+    // The default implementation returns false (servol not available).
+    // Adapters that wrap DRFL override this with the real call.
+    virtual bool sendCartesianServoL(const RobotPose& target,
+                                     double lin_vel, double ang_vel,
+                                     double lin_acc, double ang_acc,
+                                     double time_s = 0.0) {
+        (void)target; (void)lin_vel; (void)ang_vel;
+        (void)lin_acc; (void)ang_acc; (void)time_s;
+        return false;
+    }
+
+    // HARD halt. Issue a controller-level STOP_TYPE_QUICK. Reserved for
+    // real faults and shutdown: this can drop the servo into SAFE_OFF
+    // on some controllers, so do NOT call it from a streaming loop.
+    // Must not throw.
+    virtual void emergencyStop() = 0;
 
     // --- State queries -------------------------------------------------
     virtual bool getCurrentPose(RobotPose& out) = 0;

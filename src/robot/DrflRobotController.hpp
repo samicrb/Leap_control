@@ -34,9 +34,20 @@ public:
     bool engage() override;
     void disengage() override;
     bool moveHome(const RobotPose& safe) override;
+    bool setTcp(const std::string& name) override;
+    bool setToolWeight(const std::string& name) override;
 
     bool sendCartesianVelocity(const std::array<double, 6>& twist) override;
     void stopMotion() override;
+    void emergencyStop() override;
+    bool sendCartesianMicroMove(const RobotPose& target,
+                                double lin_vel, double ang_vel,
+                                double lin_acc, double ang_acc,
+                                double blending_radius_mm = 0.0) override;
+    bool sendCartesianServoL(const RobotPose& target,
+                             double lin_vel, double ang_vel,
+                             double lin_acc, double ang_acc,
+                             double time_s = 0.0) override;
     bool getCurrentPose(RobotPose& out) override;
 
     std::string lastError() const override { return last_error_; }
@@ -56,6 +67,10 @@ private:
     RobotPose current_pose_;
     double    last_twist_time_s_ = 0.0;
     std::array<double, 6> last_twist_ {0,0,0,0,0,0};
+    // Tracks whether the last speedl we issued was at zero so we can
+    // emit a single zero command on the falling edge (active->idle) and
+    // then stay quiet, rather than spamming speedl(0) at 60 Hz.
+    bool      last_was_zero_ = true;
 };
 
 } // namespace dgd

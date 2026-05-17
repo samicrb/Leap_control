@@ -6,7 +6,7 @@ Print this page and keep it next to the supervisor PC during the event.
 
 ## A. Cold-start sequence
 
-- [ ] Robot controller (A0509, V3.5) powered, emergency stop released.
+- [ ] Robot controller (M1013, V3.5) powered, emergency stop released.
 - [ ] Leap Motion sensor plugged in (USB), LED visible.
 - [ ] Ultraleap service (Gemini 6.2.0) running on the host PC.
 - [ ] Demo object positioned on the pick spot.

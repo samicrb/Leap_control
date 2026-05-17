@@ -63,11 +63,17 @@ bool StateMachine::conditionsForRecenter(const GestureReport& g) const {
 FaultReason StateMachine::evaluateFaults(const GestureReport& g, bool button_active) const {
     if (!button_active) return FaultReason::None; // caller handles -> Idle
     if (!g.sensor_ok)   return FaultReason::SensorDisconnected;
-    // Faults are only meaningful once we've left Ready.
+    // Faults are only meaningful once we've left Ready. When the
+    // Application has the brief-loss tolerance armed, hand-loss faults
+    // are masked so a transient Leap dropout does not boot the SM into
+    // FAULT (which would require the operator to lift and re-show both
+    // hands). The sensor-disconnect path is always raised.
     if (state_ == DemoState::PositionControl ||
         state_ == DemoState::OrientationControl) {
-        if (!g.leftPresent)  return FaultReason::LeftHandLost;
-        if (!g.rightPresent) return FaultReason::RightHandLost;
+        if (!suppress_hand_loss_fault_) {
+            if (!g.leftPresent)  return FaultReason::LeftHandLost;
+            if (!g.rightPresent) return FaultReason::RightHandLost;
+        }
     }
     return FaultReason::None;
 }

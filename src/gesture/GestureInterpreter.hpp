@@ -32,6 +32,13 @@ public:
     // currently set.
     bool hasReference() const { return reference_set_; }
 
+    // Accessors for the diagnostic / logging layer. Cheap reads of the
+    // smoothing state - the gesture path is NOT affected.
+    bool smootherPrimed() const { return smoother_primed_; }
+    const Vec3& smoothedRightPosition()  const { return smoothed_position_; }
+    const Vec3& smoothedRightDirection() const { return smoothed_direction_; }
+    const Vec3& smoothedRightNormal()    const { return smoothed_normal_; }
+
 private:
     const Config& cfg_;
 

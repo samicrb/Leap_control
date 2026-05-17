@@ -1,4 +1,4 @@
-# Context File — Doosan Open House Gesture-Control Demo (Leap Motion 1 + DRFL)
+# Context File — Doosan Open House Gesture-Control Demo (Leap Motion + DRFL)
 
 ## 1. Document Purpose
 
@@ -42,14 +42,26 @@ There is **no requirement to display metrics** such as latency or update rate. T
 ## 3. Platform and Environment
 
 ### Robot
-- **Robot model:** Doosan **A0912**
+- **Robot model:** Doosan **M1013** (project history: A0912 -> A0509 -> M1013;
+  the platform was retargeted twice during bring-up. M-series has a longer
+  reach than the cobot A-series, behaviour is otherwise comparable.)
 - **Controller software:** **V3.5**
-- **Doosan robot API version to use:** **DRFL 1.33.2**
-- **End effector:** **Schunk gripper**
+- **Doosan robot API version to use:** **DRFL 1.33.3** (from
+  [github.com/DoosanRobotics/API-DRFL](https://github.com/DoosanRobotics/API-DRFL))
+- **Robot IP / port:** `192.168.1.25` : `12345` (configurable in
+  `config/demo_config.ini`)
+- **Safe pose (BASE frame, Doosan ZYZ' Euler):**
+  `x=55, y=400, z=375, rx=33 (W), ry=96 (P), rz=110 (R)` in mm / deg.
+  `rx/ry/rz` are stored under those legacy names but are interpreted as
+  Doosan `(W, P, R)` — see `src/robot/RobotPose.hpp`.
+- **End effector:** any **two-state, tool-DO–driven gripper**
+  (Schunk, Robotiq, OnRobot, custom). Wired through
+  `src/gripper/ToolIoGripperController.{hpp,cpp}` — channel indices are
+  configurable (`gripper.open_do_index`, `gripper.close_do_index`).
 
 ### Sensor
-- **Leap Motion Controller 1**
-- **Ultraleap SDK / tracking stack to use:** **Gemini V5.x**
+- **Leap Motion Controller** (any USB unit supported by Ultraleap Gemini)
+- **Ultraleap SDK / tracking stack to use:** **Gemini 6.2.0**
 - **Preferred API for sensor integration:** **LeapC**
 - Mounted **on a fixed table**
 - Sensor oriented **upward**
@@ -720,9 +732,9 @@ Examples:
 
 The following version choices are fixed project constraints and must be respected unless a real hardware compatibility issue forces a change:
 
-- **Ultraleap tracking stack / SDK:** **Gemini V5.x**
+- **Ultraleap tracking stack / SDK:** **Gemini 6.2.0**
 - **Ultraleap sensor API:** **LeapC**
-- **Doosan robot API:** **DRFL 1.33.2**
+- **Doosan robot API:** **DRFL 1.33.3** (API-DRFL GitHub release)
 
 Implementation note:
 - Do not use a legacy Leap Motion SDK as the primary integration path.
@@ -743,7 +755,7 @@ For implementation decisions, prefer:
 
 ## 25. Final Instruction to the Code-Generation AI
 
-Build a **demo-grade, robust, operator-friendly gesture control application** for a **Doosan A0912 with V3.5 controller**, using a **Leap Motion Controller 1** and an **external Windows 11 PC**, with the following goals:
+Build a **demo-grade, robust, operator-friendly gesture control application** for a **Doosan M1013 with V3.5 controller**, using a **Leap Motion Controller** and an **external Windows 11 PC**, with the following goals:
 
 - make the robot feel reactive and intuitive
 - keep behavior safe and conservative
@@ -755,3 +767,100 @@ Build a **demo-grade, robust, operator-friendly gesture control application** fo
 - prioritize reliability over complexity
 
 When uncertain between a flashy behavior and a stable behavior, choose the **stable behavior**.
+
+---
+
+## 26. Implementation Status (post-bring-up)
+
+This section captures what was actually built and what was learned during
+hardware bring-up. It supersedes earlier sections when in conflict.
+
+### 26.1 What ships
+- 39-file C++17 project, MSVC-clean, builds on the event PC with CMake.
+- Real DRFL 1.33.3 adapter (`DrflRobotController`) + LeapC Gemini 6.2.0
+  adapter (`LeapSource`). Both fall back to cooperative stubs when their
+  SDK is absent, so the state machine / UI can be exercised on a dev
+  laptop.
+- 11-scenario state-machine smoke test (no hardware needed).
+- All tuning knobs in `config/demo_config.ini` — no recompile required.
+
+### 26.2 DRFL bring-up sequence (validated)
+The adapter performs this sequence in `connect()` + `engage()`, in order.
+Every step came from a real bring-up failure on the cell:
+
+1. `open_connection(ip, port)`
+2. `setup_monitoring_version(1)`
+3. Register monitoring callbacks: `state`, `access_control`, `log_alarm`
+4. `manage_access_control(MANAGE_ACCESS_CONTROL_FORCE_REQUEST)`
+5. Wait for `MONITORING_ACCESS_CONTROL_GRANT` (timeout-bounded)
+6. **Auto-reset latched safety stops** (`CONTROL_RESET_SAFET_STOP` /
+   `_OFF`) — a SAFE_STOP from a previous run latches across sessions
+   and masquerades as "mastering lost".
+7. If `STATE_SAFE_OFF` / `STATE_SAFE_OFF2`: `set_robot_control(CONTROL_SERVO_ON)`
+8. Wait for `STATE_STANDBY`
+9. `set_robot_mode(ROBOT_MODE_AUTONOMOUS)`
+10. `set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_STOP)` —
+    avoids inheriting the pendant's MANUAL collaborative speed cap.
+11. `change_collision_sensitivity(0.0f)` — bring-up only; payload / TCP
+    aren't declared so model-based collision detection must be off.
+12. `set_singularity_handling(SINGULARITY_AVOIDANCE_AVOID)` — let the
+    controller blend through wrist singularities; without this the
+    safe-pose move trips alarm 3205 → SAFE_OFF (alarm 7056).
+13. Now safe to issue motion commands.
+
+A real **mastering loss** (`STATE_RECOVERY`) is NOT bypassable from the
+API; the operator must run `Setting → Robot → Mastering → Use existing
+mastering data` on the teach pendant.
+
+### 26.3 Motion primitives
+- **Safe-pose approach:** `movejx(target, sol=0, vel=20°/s, acc=60°/s²)`
+  by default (configurable). `movejx` interpolates in joint space which
+  is immune to Cartesian wrist singularities. `movel` is still
+  available via `robot.home_use_movejx = false`.
+- **Streaming:** `speedl(twist, accel, 0.1)` at the loop rate. Angular
+  velocity is interpreted as an instantaneous ω-vector around BASE X/Y/Z
+  — small-angle Euler-rate ≈ ω-vector approximation is fine in the
+  demo's bounded orientation range.
+- **Pause vs. emergency:**
+  - `stopMotion()` → soft pause via zero `speedl`. Safe at 60 Hz; used
+    in every passive state (IDLE / READY / RECENTER / GRIPPER /
+    Fault re-ticks).
+  - `emergencyStop()` → `stop(STOP_TYPE_QUICK)`. Reserved for the
+    one-shot Fault entry and the shutdown path; can transition the
+    controller to SAFE_OFF, so never call it on the streaming loop.
+
+### 26.4 Doosan V3.5 rotation convention
+The `RobotPose` fields `rx, ry, rz` are **Doosan ZYZ' intrinsic Euler
+(W, P, R)** — not extrinsic XYZ around BASE X/Y/Z. The names are
+preserved for historical reasons but documented at every site that
+matters (`RobotPose.hpp`, `Config.hpp`, `demo_config.ini`,
+`docs/TUNING_GUIDE.md`). Values captured from the pendant's posx
+display flow through verbatim.
+
+### 26.5 Configurable flags added during bring-up
+All in `config/demo_config.ini` under the `robot.*` namespace:
+
+| Flag | Default | Use |
+|---|---|---|
+| `robot.skip_move_home` | `false` | bypass the home `movejx` for first-time integration |
+| `robot.collision_sensitivity` | `0` | 0 disables; restore 50-75 once payload/TCP declared |
+| `robot.singularity_handling` | `0` | 0=AVOID, 1=STOP, 2=VEL (Doosan enum) |
+| `robot.home_use_movejx` | `true` | `movejx` joint-space vs. `movel` Cartesian for home |
+| `robot.auto_reset_safety` | `true` | clear latched SAFE_STOP / SAFE_OFF on engage |
+| `workspace.enabled` | `false` | workspace cube + orientation cone — keep off for bring-up |
+
+### 26.6 Lessons learned
+- Doosan controllers latch safety stops across sessions. Symptom looks
+  like "mastering lost"; cure is `CONTROL_RESET_SAFET_*` at engage, not
+  pendant intervention.
+- Collision detection trips on phantom torques when payload / TCP
+  isn't declared. Always disable for bring-up.
+- Cartesian `movel` paths to a "natural" pendant-captured pose can
+  graze a wrist singularity even when both endpoints are well-conditioned.
+  Default to `movejx` for any planned approach; reserve `movel` for
+  motion that *has* to be Cartesian-linear.
+- DRFL's `set_on_log_alarm` is the single most useful diagnostic. Wire
+  it from day one (level / group / index / params) — the cell's actual
+  failure mode is invisible without it.
+- `STOP_TYPE_QUICK` in a 60 Hz loop will eventually drop the servo to
+  SAFE_OFF. Reserve it for true faults / shutdown.

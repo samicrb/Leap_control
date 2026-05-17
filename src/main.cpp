@@ -2,7 +2,7 @@
 
 #include "app/Application.hpp"
 #include "config/Config.hpp"
-#include "gripper/ToolIoGripperController.hpp"
+#include "gripper/GripperFactory.hpp"
 #include "input/KeyboardButton.hpp"
 #include "robot/DrflRobotController.hpp"
 #include "sensor/LeapSource.hpp"
@@ -37,16 +37,29 @@ int main(int argc, char** argv) {
 
     dgd::Logger::instance().configure(dgd::parseLogLevel(cfg.log_level), cfg.log_file);
     LOG_I("Doosan gesture demo starting.");
+    LOG_I("Gripper enabled            : %s",
+          cfg.gripper_enabled ? "true" : "false");
+    LOG_I("Return-home on start       : %s",
+          cfg.return_home_on_start ? "true" : "false");
+    LOG_I("Return-home on shutdown    : %s",
+          cfg.return_home_on_shutdown ? "true" : "false");
+    LOG_I("Velocity filter enabled    : %s",
+          cfg.micro_velocity_filter_enabled ? "true" : "false");
+    LOG_I("Tool apply_on_start        : %s",
+          cfg.tool_apply_on_start ? "true" : "false");
+    LOG_I("Tool TCP name              : '%s'", cfg.tool_tcp_name.c_str());
+    LOG_I("Tool Weight name           : '%s'",
+          cfg.tool_tool_weight_name.c_str());
 
     std::signal(SIGINT,  handleSignal);
     std::signal(SIGTERM, handleSignal);
 
     dgd::LeapSource            sensor;
     dgd::DrflRobotController   robot(cfg);
-    dgd::ToolIoGripperController gripper(cfg, robot);
+    auto                       gripper = dgd::makeGripper(cfg, robot);
     dgd::KeyboardButton        button;
 
-    dgd::Application app(cfg, sensor, robot, gripper, button);
+    dgd::Application app(cfg, sensor, robot, *gripper, button, config_path);
     g_app = &app;
 
     if (!app.initialise()) {

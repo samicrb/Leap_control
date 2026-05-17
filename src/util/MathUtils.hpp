@@ -50,4 +50,22 @@ inline Vec3 emaVec(const Vec3& prev, const Vec3& sample, double alpha) {
              ema(prev[2], sample[2], alpha) };
 }
 
+// Vector-norm limiter for a 3-component step. If sqrt(a^2+b^2+c^2)
+// exceeds max_norm, scale all three components uniformly so the result
+// has exactly max_norm. Returns true when scaling was applied. NEVER
+// clamps per-axis: the historical (22,22,22) bug produced a vector
+// norm of sqrt(3)*22 = 38.1 mm despite a 22 mm per-axis cap.
+inline bool limitVectorNorm3(double& a, double& b, double& c, double max_norm) {
+    if (max_norm <= 0.0) return false;
+    const double n = std::sqrt(a * a + b * b + c * c);
+    if (n <= max_norm) return false;
+    const double k = max_norm / n;
+    a *= k; b *= k; c *= k;
+    return true;
+}
+
+inline double vec3Norm(double a, double b, double c) {
+    return std::sqrt(a * a + b * b + c * c);
+}
+
 } // namespace dgd
