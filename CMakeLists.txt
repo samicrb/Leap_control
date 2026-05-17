@@ -136,8 +136,16 @@ add_executable(state_machine_smoke_test
     src/util/Logger.cpp
 )
 target_include_directories(state_machine_smoke_test PRIVATE src)
+
+# Vector-norm limiter regression test (header-only target).
+add_executable(vector_norm_limiter_test
+    test/vector_norm_limiter_test.cpp
+)
+target_include_directories(vector_norm_limiter_test PRIVATE src)
+
 enable_testing()
-add_test(NAME state_machine_smoke COMMAND state_machine_smoke_test)
+add_test(NAME state_machine_smoke      COMMAND state_machine_smoke_test)
+add_test(NAME vector_norm_limiter      COMMAND vector_norm_limiter_test)
 
 # Copy config next to binary so the demo can be launched directly.
 add_custom_command(TARGET doosan_gesture_demo POST_BUILD

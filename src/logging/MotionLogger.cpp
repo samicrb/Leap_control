@@ -67,15 +67,29 @@ const char* kHeader =
     "last_commanded_rx,last_commanded_ry,last_commanded_rz,"
     "commanded_x,commanded_y,commanded_z,"
     "commanded_rx,commanded_ry,commanded_rz,"
-    "actual_robot_x,actual_robot_y,actual_robot_z,"
-    "actual_robot_rx,actual_robot_ry,actual_robot_rz,"
+    "cached_actual_robot_x,cached_actual_robot_y,cached_actual_robot_z,"
+    "cached_actual_robot_rx,cached_actual_robot_ry,cached_actual_robot_rz,"
     "position_error_mm,rotation_error_deg,"
     "commanded_step_xyz_mm,commanded_step_rot_deg,"
     "micro_command_rate_hz,micro_min_period_s,"
     "micro_lin_vel,micro_lin_acc,micro_ang_vel,micro_ang_acc,"
     "micro_blending_enabled,micro_blending_radius_mm,"
     "micro_pursuit_enabled,micro_hand_to_robot_ratio,"
-    "motion_position_scale,motion_orientation_scale,motion_smoothing_alpha\n";
+    "motion_position_scale,motion_orientation_scale,motion_smoothing_alpha,"
+    // Extended diagnostics
+    "command_interval_ms,scheduler_elapsed_ms,previous_motion_estimated_time_ms,"
+    "backlog_guard_active,loop_overrun_ms,"
+    "cached_actual_pose_age_ms,actual_pose_live,"
+    "raw_error_x,raw_error_y,raw_error_z,raw_error_rx,raw_error_ry,raw_error_rz,"
+    "desired_velocity_x,desired_velocity_y,desired_velocity_z,"
+    "desired_velocity_rx,desired_velocity_ry,desired_velocity_rz,"
+    "filtered_velocity_x,filtered_velocity_y,filtered_velocity_z,"
+    "filtered_velocity_rx,filtered_velocity_ry,filtered_velocity_rz,"
+    "limited_accel_x,limited_accel_y,limited_accel_z,"
+    "limited_accel_rx,limited_accel_ry,limited_accel_rz,"
+    "raw_step_xyz_mm,limited_step_xyz_mm,raw_step_rot_deg,limited_step_rot_deg,"
+    "velocity_deadband_applied,jerk_limit_applied,accel_limit_applied,"
+    "step_norm_clipped,tracking_stable_age_ms\n";
 
 void writeVec3(std::FILE* f, const std::optional<std::array<double, 3>>& v) {
     if (v) {
@@ -197,7 +211,7 @@ void MotionLogger::append(const MotionLogSample& s) {
 
     std::fprintf(file_,
                  ",%.4f,%.4f,%.4f,%.4f,"
-                 "%.3f,%.4f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%d,%.4f,%.4f,%.4f,%.4f\n",
+                 "%.3f,%.4f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%d,%.4f,%.4f,%.4f,%.4f",
                  s.position_error_mm, s.rotation_error_deg,
                  s.commanded_step_xyz_mm, s.commanded_step_rot_deg,
                  s.micro_command_rate_hz, s.micro_min_period_s,
@@ -207,6 +221,31 @@ void MotionLogger::append(const MotionLogSample& s) {
                  s.micro_pursuit_enabled ? 1 : 0, s.micro_hand_to_robot_ratio,
                  s.motion_position_scale, s.motion_orientation_scale,
                  s.motion_smoothing_alpha);
+
+    // Extended diagnostics block.
+    std::fprintf(file_,
+                 ",%.3f,%.3f,%.3f,%d,%.3f,%.3f,%d",
+                 s.command_interval_ms, s.scheduler_elapsed_ms,
+                 s.previous_motion_estimated_time_ms,
+                 s.backlog_guard_active ? 1 : 0,
+                 s.loop_overrun_ms,
+                 s.cached_actual_pose_age_ms,
+                 s.actual_pose_live ? 1 : 0);
+
+    writeVec6(file_, s.raw_error);
+    writeVec6(file_, s.desired_velocity);
+    writeVec6(file_, s.filtered_velocity);
+    writeVec6(file_, s.limited_accel);
+
+    std::fprintf(file_,
+                 ",%.4f,%.4f,%.4f,%.4f,%d,%d,%d,%d,%.3f\n",
+                 s.raw_step_xyz_mm, s.limited_step_xyz_mm,
+                 s.raw_step_rot_deg, s.limited_step_rot_deg,
+                 s.velocity_deadband_applied ? 1 : 0,
+                 s.jerk_limit_applied ? 1 : 0,
+                 s.accel_limit_applied ? 1 : 0,
+                 s.step_norm_clipped ? 1 : 0,
+                 s.tracking_stable_age_ms);
 
     if (++pending_ >= flush_every_n_) flush();
 }

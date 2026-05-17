@@ -90,6 +90,7 @@ const Alias kAliases[] = {
     {"micro_pursuit.max_step_rot_deg",    "robot.micro_max_step_rot_deg"},
     {"micro_pursuit.arrival_band_xyz_mm", "robot.micro_arrival_band_xyz_mm"},
     {"micro_pursuit.arrival_band_rot_deg","robot.micro_arrival_band_rot_deg"},
+    {"micro_pursuit.tracking_recovery_time_s","robot.micro_tracking_recovery_time_s"},
 
     // [robot_command]
     {"robot_command.micro_command_rate_hz","robot.micro_command_rate_hz"},
@@ -102,6 +103,9 @@ const Alias kAliases[] = {
     {"robot_command.micro_max_step_xyz_mm","robot.micro_max_step_xyz_mm"},
     {"robot_command.micro_min_step_rot_deg","robot.micro_min_step_rot_deg"},
     {"robot_command.micro_max_step_rot_deg","robot.micro_max_step_rot_deg"},
+    {"robot_command.prevent_command_backlog",  "robot.prevent_command_backlog"},
+    {"robot_command.min_motion_completion_ratio","robot.min_motion_completion_ratio"},
+    {"robot_command.max_pending_command_age_s","robot.max_pending_command_age_s"},
 
     // [blending]
     {"blending.enabled",   "robot.micro_blending_enabled"},
@@ -288,6 +292,15 @@ bool loadConfig(const std::string& path, Config& c) {
     c.micro_max_jerk_rot            = dGet("robot.micro_max_jerk_rot",            c.micro_max_jerk_rot);
     c.micro_velocity_deadband_mm_s  = dGet("robot.micro_velocity_deadband_mm_s",  c.micro_velocity_deadband_mm_s);
     c.micro_stop_ramp_time_s        = dGet("robot.micro_stop_ramp_time_s",        c.micro_stop_ramp_time_s);
+
+    c.micro_tracking_recovery_time_s = dGet("robot.micro_tracking_recovery_time_s",
+                                            c.micro_tracking_recovery_time_s);
+    c.prevent_command_backlog     = bGet("robot.prevent_command_backlog",
+                                         c.prevent_command_backlog);
+    c.min_motion_completion_ratio = dGet("robot.min_motion_completion_ratio",
+                                         c.min_motion_completion_ratio);
+    c.max_pending_command_age_s   = dGet("robot.max_pending_command_age_s",
+                                         c.max_pending_command_age_s);
 
     c.logging_enabled             = bGet("logging.enabled",              c.logging_enabled);
     c.logging_directory           = sGet("logging.log_directory",        c.logging_directory);

@@ -77,6 +77,40 @@ struct MotionLogSample {
     double motion_position_scale     = 0.0;
     double motion_orientation_scale  = 0.0;
     double motion_smoothing_alpha    = 0.0;
+
+    // --- Extended diagnostic columns -----------------------------------
+    // Timing.
+    double command_interval_ms              = 0.0; // gap to previous send
+    double scheduler_elapsed_ms             = 0.0; // elapsed since last_command_sent_s_
+    double previous_motion_estimated_time_ms = 0.0; // from last step + lin/ang vel
+    bool   backlog_guard_active             = false;
+    double loop_overrun_ms                  = 0.0; // dt_ms - 1000/loop_rate_hz
+
+    // Cached actual-pose freshness. The active path never refreshes pose
+    // (alarm 5.7056 root cause), so this is "age since last !active poll".
+    double cached_actual_pose_age_ms = 0.0;
+    bool   actual_pose_live          = false;
+
+    // Velocity-filter per-stage trace (XYZ then RXYZ). nullopt unless
+    // the velocity-filter path actually ran this tick.
+    std::optional<std::array<double, 6>> raw_error;
+    std::optional<std::array<double, 6>> desired_velocity;
+    std::optional<std::array<double, 6>> filtered_velocity;
+    std::optional<std::array<double, 6>> limited_accel;
+    // Raw step magnitudes BEFORE the vector-norm cap. The "limited"
+    // values equal the final commanded_step_*.
+    double raw_step_xyz_mm     = 0.0;
+    double limited_step_xyz_mm = 0.0;
+    double raw_step_rot_deg    = 0.0;
+    double limited_step_rot_deg= 0.0;
+    bool   velocity_deadband_applied = false;
+    bool   jerk_limit_applied        = false;
+    bool   accel_limit_applied       = false;
+    // True when the vector-norm cap actively scaled the integrated step.
+    bool   step_norm_clipped         = false;
+
+    // Tracking-stability gate.
+    double tracking_stable_age_ms = 0.0; // 0 = invalid this tick
 };
 
 class MotionLogger {

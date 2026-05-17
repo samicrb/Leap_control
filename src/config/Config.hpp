@@ -184,6 +184,27 @@ struct Config {
     // tail ticks are still amovels with shrinking velocity targets.
     double micro_stop_ramp_time_s        = 0.18;
 
+    // --- Tracking stability gate (pursuit re-arm guard) -------------------
+    // After tracking is lost, refuse to update the pursuit target / send
+    // amovel commands until tracking has been continuously valid for at
+    // least this duration. Prevents the POSITION -> RECENTER -> FAULT
+    // oscillation seen on borderline confidence values.
+    double micro_tracking_recovery_time_s = 0.30;
+
+    // --- Command-backlog guard -------------------------------------------
+    // The amovel scheduler estimates how long the previously emitted
+    // segment will take to execute (max(step_xyz/v_lin, step_rot/v_ang))
+    // and refuses to enqueue the next segment until at least
+    // min_motion_completion_ratio of that estimate has elapsed. This
+    // stops the controller from accumulating a long queue of micro-
+    // segments that the robot then catches up to in bursts.
+    bool   prevent_command_backlog     = true;
+    double min_motion_completion_ratio = 0.60;
+    // Hard upper bound: if the previous segment is somehow still flagged
+    // pending after this many seconds, force-release the guard so the
+    // pursuit doesn't stall forever.
+    double max_pending_command_age_s   = 0.35;
+
     // --- Motion logging (CSV + event log) ---------------------------------
     // When logging_enabled = false, no files are opened and the logging
     // hooks are zero-cost in the active path.

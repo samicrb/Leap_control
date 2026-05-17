@@ -49,6 +49,9 @@ bool validate(const char* key, double v) {
     if (std::strcmp(key, "motion.smoothing_alpha") == 0)       return v >= 0.0 && v <= 1.0;
     if (std::strcmp(key, "logging.flush_every_n_samples")==0)  return v >= 1.0 && v <= 10000.0;
     if (std::strcmp(key, "debug.summary_period_s") == 0)       return v > 0.0 && v <= 60.0;
+    if (std::strcmp(key, "robot.micro_tracking_recovery_time_s")==0) return v >= 0.0 && v <= 5.0;
+    if (std::strcmp(key, "robot.min_motion_completion_ratio")==0) return v >= 0.0 && v <= 1.5;
+    if (std::strcmp(key, "robot.max_pending_command_age_s")==0)return v > 0.0 && v <= 5.0;
     return true; // bool-only keys handled separately, defaults pass
 }
 
@@ -174,6 +177,10 @@ bool RuntimeConfigReloader::applyDiff(const Config& fresh) {
     TRY_DOUBLE(micro_max_step_rot_deg,     "robot.micro_max_step_rot_deg");
     TRY_DOUBLE(micro_arrival_band_xyz_mm,  "robot.micro_arrival_band_xyz_mm");
     TRY_DOUBLE(micro_arrival_band_rot_deg, "robot.micro_arrival_band_rot_deg");
+    TRY_DOUBLE(micro_tracking_recovery_time_s, "robot.micro_tracking_recovery_time_s");
+    TRY_BOOL  (prevent_command_backlog,    "robot.prevent_command_backlog");
+    TRY_DOUBLE(min_motion_completion_ratio,"robot.min_motion_completion_ratio");
+    TRY_DOUBLE(max_pending_command_age_s,  "robot.max_pending_command_age_s");
 
     // Step range sanity (max >= min after edits).
     if (live_->micro_max_step_xyz_mm < live_->micro_min_step_xyz_mm) {

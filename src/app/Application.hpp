@@ -132,6 +132,24 @@ private:
     double                last_vel_update_s_ = 0.0;
     bool                  ramp_to_zero_      = false;
     double                ramp_start_s_      = 0.0;
+
+    // --- Tracking-stability gate ---
+    // Once tracking goes invalid (sensor lost OR no fresh frame OR right
+    // hand below confidence) we freeze the pursuit pipeline and refuse
+    // to send amovel commands. On recovery we require the tracking to
+    // remain valid for cfg_.micro_tracking_recovery_time_s before re-
+    // arming, which prevents the POSITION -> RECENTER -> FAULT chatter
+    // observed in field logs.
+    bool                  tracking_valid_last_ = false;
+    double                tracking_valid_since_s_ = -1.0;
+    bool                  pursuit_armed_      = false;
+
+    // --- Backlog guard state ---
+    // Stores the magnitude of the last emitted segment so the scheduler
+    // can estimate t_est = max(step_xyz / v_lin, step_rot / v_ang) and
+    // wait min_motion_completion_ratio * t_est before queueing the next.
+    double                last_emitted_step_xyz_mm_ = 0.0;
+    double                last_emitted_step_rot_deg_= 0.0;
 };
 
 } // namespace dgd

@@ -47,19 +47,6 @@ bool isActiveState(DemoState s) {
            s == DemoState::OrientationControl;
 }
 
-// Pursuit step: pick a value along `error` that closes the gap without
-// overshoot and without firing micro-steps below the arrival band.
-double computeStep(double error, double min_step, double max_step,
-                   double arrival_band) {
-    const double abs_e = std::abs(error);
-    if (abs_e < arrival_band) return 0.0;
-    double step_abs = std::min(abs_e, max_step);
-    if (step_abs > arrival_band) {
-        step_abs = std::max(step_abs, std::min(min_step, abs_e));
-    }
-    return std::copysign(step_abs, error);
-}
-
 // Clamp v to ±limit.
 double clampAbs(double v, double limit) {
     if (v >  limit) return  limit;
@@ -285,6 +272,43 @@ void Application::tick(double now_s) {
     GestureReport report = interpreter_.update(frame, now_s);
     report.freshFrame = fresh;
 
+    // --- Tracking-stability gate -----------------------------------------
+    // tracking_valid_now requires three things:
+    //   1. the sensor reports as connected
+    //   2. THIS tick carried a fresh frame (pollLatest returned true)
+    //   3. the right hand was actually present and above min_confidence
+    // Without all three, the pursuit pipeline must NOT update its desired
+    // target nor emit any amovel - stale samples were the root cause of
+    // commands being sent with tracking_valid=0 in the field logs.
+    const bool tracking_valid_now =
+        report.sensor_ok && report.freshFrame && report.rightPresent;
+    if (tracking_valid_now != tracking_valid_last_) {
+        if (tracking_valid_now) {
+            tracking_valid_since_s_ = now_s;
+            event_logger_.event(
+                "tracking recovered: waiting stability window",
+                cfg_.runtime_tuning_print_changes_to_console);
+        } else {
+            tracking_valid_since_s_ = -1.0;
+            pursuit_armed_          = false;
+            event_logger_.event(
+                "tracking invalid: freezing pursuit",
+                cfg_.runtime_tuning_print_changes_to_console);
+        }
+        tracking_valid_last_ = tracking_valid_now;
+    }
+    const double tracking_age_s =
+        (tracking_valid_now && tracking_valid_since_s_ >= 0.0)
+            ? (now_s - tracking_valid_since_s_) : 0.0;
+    const bool tracking_stable =
+        tracking_valid_now &&
+        tracking_age_s >= cfg_.micro_tracking_recovery_time_s;
+    if (tracking_stable && !pursuit_armed_) {
+        pursuit_armed_ = true;
+        event_logger_.event("tracking stable: re-arm position control",
+                            cfg_.runtime_tuning_print_changes_to_console);
+    }
+
     // 3. State machine.
     static bool prev_btn = false;
     bool btn = button_.isActive();
@@ -322,6 +346,28 @@ void Application::tick(double now_s) {
     std::optional<std::array<double, 6>> sample_commanded_target;
     double      sample_step_xyz = 0.0;
     double      sample_step_rot = 0.0;
+    // Extended diagnostics for this tick.
+    double sample_command_interval_ms = 0.0;
+    double sample_scheduler_elapsed_ms = 0.0;
+    double sample_prev_motion_est_ms  = 0.0;
+    bool   sample_backlog_guard_active = false;
+    std::optional<std::array<double, 6>> sample_raw_error;
+    std::optional<std::array<double, 6>> sample_desired_velocity;
+    std::optional<std::array<double, 6>> sample_filtered_velocity;
+    std::optional<std::array<double, 6>> sample_limited_accel;
+    double sample_raw_step_xyz_mm = 0.0;
+    double sample_raw_step_rot_deg = 0.0;
+    bool   sample_velocity_deadband_applied = false;
+    bool   sample_jerk_limit_applied        = false;
+    bool   sample_accel_limit_applied       = false;
+    bool   sample_step_norm_clipped         = false;
+
+    // Hard tracking gate: if tracking is not stable AND we're not in
+    // a controlled ramp-to-zero tail, freeze the active branch entirely.
+    // No state update, no command emission. The previous segment (if
+    // any) is allowed to finish executing on the controller.
+    const bool active_branch_eligible =
+        critical || (cur_active && tracking_stable) || ramp_to_zero_;
 
     if (critical && !fault_emergency_issued_) {
         // One-shot hard halt on entering a critical fault. Drops any
@@ -337,7 +383,18 @@ void Application::tick(double now_s) {
         ramp_to_zero_                   = false;
         filtered_velocity_.fill(0.0);
         last_accel_.fill(0.0);
-    } else if (cur_active || ramp_to_zero_) {
+    } else if (cur_active && !tracking_stable && !ramp_to_zero_) {
+        // Tracking is not yet stable enough to enter (or remain in)
+        // active pursuit. Freeze: do not seed, do not update the
+        // desired target, do not emit. If we previously WERE active,
+        // the prev_active branch below would normally start the ramp
+        // tail; with no fresh hand data we let the in-flight amovel
+        // (if any) finish on its own. The pursuit will re-arm only
+        // after micro_tracking_recovery_time_s of continuous validity.
+        sample_skip_reason = tracking_valid_now ? "tracking_stabilizing"
+                                                 : "tracking_invalid";
+        fault_emergency_issued_ = false;
+    } else if (active_branch_eligible && (cur_active || ramp_to_zero_)) {
         // Active control via the MICRO-MOTION SUPERVISOR (with optional
         // velocity-smoothing tail when ramp_to_zero_ is latched).
         // ----------------------------------------------------------
@@ -365,7 +422,12 @@ void Application::tick(double now_s) {
         //     seed the controller; it never interleaves with an
         //     in-flight amovel.
         //   - No stopMotion, no mode change, no mwait.
-        if (!prev_active) {
+        // Seeding gate: only fire on the rising edge (prev_active=false
+        // -> cur_active=true), AND only when tracking has been stable
+        // for cfg_.micro_tracking_recovery_time_s. Otherwise we'd seed
+        // from a pose taken right after a wobble and immediately drive
+        // the pursuit toward a phantom desired target.
+        if (!prev_active && cur_active && tracking_stable) {
             // Seed both controllers from the real TCP pose.
             RobotPose seed;
             if (robot_.getCurrentPose(seed)) {
@@ -465,19 +527,41 @@ void Application::tick(double now_s) {
                 sample_desired_target = desired_target_pose_.toArray();
             }
 
+            sample_scheduler_elapsed_ms = elapsed * 1000.0;
+
+            // Backlog-guard estimate of the previous segment execution.
+            const double t_est_lin = cfg_.micro_lin_vel > 1e-3
+                ? last_emitted_step_xyz_mm_  / cfg_.micro_lin_vel : 0.0;
+            const double t_est_ang = cfg_.micro_ang_vel > 1e-3
+                ? last_emitted_step_rot_deg_ / cfg_.micro_ang_vel : 0.0;
+            const double t_est_s = std::max(t_est_lin, t_est_ang);
+            sample_prev_motion_est_ms = t_est_s * 1000.0;
+            const bool backlog_guard_engaged =
+                cfg_.prevent_command_backlog &&
+                last_emitted_step_xyz_mm_ + last_emitted_step_rot_deg_ > 1e-6 &&
+                elapsed < cfg_.min_motion_completion_ratio * t_est_s &&
+                elapsed < cfg_.max_pending_command_age_s;
+            sample_backlog_guard_active = backlog_guard_engaged;
+
             if (elapsed < period_floor) {
                 // Too soon since last amovel - skip. No log: 60 Hz spam.
                 sample_skip_reason = "scheduler";
+            } else if (backlog_guard_engaged) {
+                sample_skip_reason = "backlog_guard";
             } else if (cfg_.micro_pursuit_enabled &&
                        cfg_.micro_velocity_filter_enabled) {
                 // --- PURSUIT + VELOCITY-SMOOTHED step ----------------
-                // Instead of committing to a fixed-size position step,
-                // we derive a desired Cartesian velocity from the
-                // remaining pose error, low-pass filter it, then apply
-                // hard accel and jerk caps. The new amovel target is
-                // last_commanded + filtered_velocity * dt. The robot
-                // therefore sees a continuous velocity profile - no
-                // visible accel/decel between segments.
+                // Stages (logged separately so the CSV pin-points where
+                // a discontinuity is introduced):
+                //   1. raw_error = desired - last_commanded
+                //   2. v_des     = Kp * err clamped to per-axis lin/ang cap
+                //   3. v_filt    = LPF(alpha)
+                //   4. accel cap (per-axis)        -> accel_limit_applied
+                //   5. jerk  cap (per-axis)        -> jerk_limit_applied
+                //   6. velocity deadband            -> velocity_deadband_applied
+                //   7. integrate to step           -> raw_step_xyz_mm
+                //   8. vector-norm cap on XYZ step -> step_norm_clipped
+                //   9. emit amovel
                 const double dt   = std::max(elapsed, 1e-3);
                 const double Kp_l = std::max(cfg_.micro_command_rate_hz, 1.0);
                 const double Kp_r = Kp_l;
@@ -491,6 +575,8 @@ void Application::tick(double now_s) {
                     desired_target_pose_.ry - last_commanded_target_pose_.ry,
                     desired_target_pose_.rz - last_commanded_target_pose_.rz
                 };
+                sample_raw_error = std::array<double, 6>{
+                    err[0], err[1], err[2], err[3], err[4], err[5]};
 
                 // 2. Desired velocity v_des = Kp * err, clamped to caps.
                 double v_des[6] = {
@@ -501,6 +587,8 @@ void Application::tick(double now_s) {
                     clampAbs(Kp_r * err[4], cfg_.micro_ang_vel),
                     clampAbs(Kp_r * err[5], cfg_.micro_ang_vel)
                 };
+                sample_desired_velocity = std::array<double, 6>{
+                    v_des[0], v_des[1], v_des[2], v_des[3], v_des[4], v_des[5]};
 
                 // 3. Low-pass filter.
                 const double a = clampAbs(cfg_.micro_velocity_filter_alpha, 1.0);
@@ -509,16 +597,22 @@ void Application::tick(double now_s) {
                     v_filt[i] = a * v_des[i] + (1.0 - a) * filtered_velocity_[i];
                 }
 
-                // 4. Acceleration limit.
+                // 4. Acceleration limit. Track whether any axis was clipped.
                 const double accel_cap_lin = cfg_.micro_lin_acc * dt;
                 const double accel_cap_ang = cfg_.micro_ang_acc * dt;
                 for (int i = 0; i < 3; ++i) {
+                    const double before = v_filt[i];
                     v_filt[i] = limitDelta(v_filt[i], filtered_velocity_[i],
                                            accel_cap_lin);
+                    if (std::abs(v_filt[i] - before) > 1e-9)
+                        sample_accel_limit_applied = true;
                 }
                 for (int i = 3; i < 6; ++i) {
+                    const double before = v_filt[i];
                     v_filt[i] = limitDelta(v_filt[i], filtered_velocity_[i],
                                            accel_cap_ang);
+                    if (std::abs(v_filt[i] - before) > 1e-9)
+                        sample_accel_limit_applied = true;
                 }
 
                 // 5. Jerk limit (cap on rate of change of acceleration).
@@ -529,13 +623,19 @@ void Application::tick(double now_s) {
                     accel_new[i] = (v_filt[i] - filtered_velocity_[i]) / dt;
                 }
                 for (int i = 0; i < 3; ++i) {
+                    const double before_a = accel_new[i];
                     accel_new[i] = limitDelta(accel_new[i], last_accel_[i],
                                               jerk_cap_lin);
+                    if (std::abs(accel_new[i] - before_a) > 1e-9)
+                        sample_jerk_limit_applied = true;
                     v_filt[i] = filtered_velocity_[i] + accel_new[i] * dt;
                 }
                 for (int i = 3; i < 6; ++i) {
+                    const double before_a = accel_new[i];
                     accel_new[i] = limitDelta(accel_new[i], last_accel_[i],
                                               jerk_cap_ang);
+                    if (std::abs(accel_new[i] - before_a) > 1e-9)
+                        sample_jerk_limit_applied = true;
                     v_filt[i] = filtered_velocity_[i] + accel_new[i] * dt;
                 }
 
@@ -546,13 +646,22 @@ void Application::tick(double now_s) {
                 for (int i = 0; i < 3; ++i) {
                     if (std::abs(v_filt[i]) < vbd_lin) {
                         v_filt[i] = 0.0; accel_new[i] = 0.0;
+                        sample_velocity_deadband_applied = true;
                     } else any_velocity = true;
                 }
                 for (int i = 3; i < 6; ++i) {
                     if (std::abs(v_filt[i]) < vbd_ang) {
                         v_filt[i] = 0.0; accel_new[i] = 0.0;
+                        sample_velocity_deadband_applied = true;
                     } else any_velocity = true;
                 }
+
+                sample_filtered_velocity = std::array<double, 6>{
+                    v_filt[0], v_filt[1], v_filt[2],
+                    v_filt[3], v_filt[4], v_filt[5]};
+                sample_limited_accel = std::array<double, 6>{
+                    accel_new[0], accel_new[1], accel_new[2],
+                    accel_new[3], accel_new[4], accel_new[5]};
 
                 // Commit state.
                 for (int i = 0; i < 6; ++i) {
@@ -573,57 +682,80 @@ void Application::tick(double now_s) {
                               "(any_velocity=%d, timeout=%d, elapsed=%.3fs).",
                               any_velocity ? 1 : 0, timeout ? 1 : 0,
                               now_s - ramp_start_s_);
+                        event_logger_.event("motion tail complete");
                         ramp_to_zero_                  = false;
                         active_entry_robot_pose_valid_ = false;
                         last_commanded_target_valid_   = false;
                         virtual_target_initialised_    = false;
                         filtered_velocity_.fill(0.0);
                         last_accel_.fill(0.0);
+                        last_emitted_step_xyz_mm_ = 0.0;
+                        last_emitted_step_rot_deg_= 0.0;
                     }
                 }
 
                 if (any_velocity) {
-                    // 7. Integrate to next target.
-                    RobotPose pursuit_target = last_commanded_target_pose_;
-                    pursuit_target.x  += v_filt[0] * dt;
-                    pursuit_target.y  += v_filt[1] * dt;
-                    pursuit_target.z  += v_filt[2] * dt;
-                    pursuit_target.rx += v_filt[3] * dt;
-                    pursuit_target.ry += v_filt[4] * dt;
-                    pursuit_target.rz += v_filt[5] * dt;
+                    // 7. Compute the integrated step (pre-cap).
+                    double dx = v_filt[0] * dt;
+                    double dy = v_filt[1] * dt;
+                    double dz = v_filt[2] * dt;
+                    double drx = v_filt[3] * dt;
+                    double dry = v_filt[4] * dt;
+                    double drz = v_filt[5] * dt;
+                    sample_raw_step_xyz_mm  = vec3Norm(dx, dy, dz);
+                    sample_raw_step_rot_deg = vec3Norm(drx, dry, drz);
 
-                    const double seg_norm = std::sqrt(
-                        (v_filt[0]*dt)*(v_filt[0]*dt) +
-                        (v_filt[1]*dt)*(v_filt[1]*dt) +
-                        (v_filt[2]*dt)*(v_filt[2]*dt));
+                    // 8. Vector-norm cap. Replaces the previous implicit
+                    // per-axis cap which let segments grow to ~sqrt(3)*max.
+                    const bool clip_xyz = limitVectorNorm3(
+                        dx, dy, dz, cfg_.micro_max_step_xyz_mm);
+                    const bool clip_rot = limitVectorNorm3(
+                        drx, dry, drz, cfg_.micro_max_step_rot_deg);
+                    sample_step_norm_clipped = clip_xyz || clip_rot;
+
+                    RobotPose pursuit_target = last_commanded_target_pose_;
+                    pursuit_target.x  += dx;
+                    pursuit_target.y  += dy;
+                    pursuit_target.z  += dz;
+                    pursuit_target.rx += drx;
+                    pursuit_target.ry += dry;
+                    pursuit_target.rz += drz;
+
+                    const double seg_norm = vec3Norm(dx, dy, dz);
+                    const double rot_norm = vec3Norm(drx, dry, drz);
                     const double radius = cfg_.micro_blending_enabled
                         ? std::min(cfg_.micro_blending_radius_mm,
                                    0.4 * seg_norm)
                         : 0.0;
 
-                    LOG_D("vel-smooth: err=[%.2f %.2f %.2f / %.2f %.2f %.2f] "
-                          "v=[%.1f %.1f %.1f / %.2f %.2f %.2f] "
-                          "a=[%.0f %.0f %.0f / %.1f %.1f %.1f] seg=%.2f r=%.2f.",
-                          err[0], err[1], err[2], err[3], err[4], err[5],
-                          v_filt[0], v_filt[1], v_filt[2],
-                          v_filt[3], v_filt[4], v_filt[5],
-                          accel_new[0], accel_new[1], accel_new[2],
-                          accel_new[3], accel_new[4], accel_new[5],
-                          seg_norm, radius);
+                    if (cfg_.debug_verbose_robot_commands) {
+                        LOG_D("vel-smooth: err=[%.2f %.2f %.2f / %.2f %.2f %.2f] "
+                              "v=[%.1f %.1f %.1f / %.2f %.2f %.2f] "
+                              "seg=%.2f rot=%.2f r=%.2f clip=%d.",
+                              err[0], err[1], err[2], err[3], err[4], err[5],
+                              v_filt[0], v_filt[1], v_filt[2],
+                              v_filt[3], v_filt[4], v_filt[5],
+                              seg_norm, rot_norm, radius,
+                              sample_step_norm_clipped ? 1 : 0);
+                    }
 
                     if (robot_.sendCartesianMicroMove(
                             pursuit_target,
                             cfg_.micro_lin_vel, cfg_.micro_ang_vel,
                             cfg_.micro_lin_acc, cfg_.micro_ang_acc,
                             radius)) {
+                        sample_command_interval_ms =
+                            (last_command_sent_s_ > 0.0)
+                                ? (now_s - last_command_sent_s_) * 1000.0
+                                : 0.0;
                         last_commanded_target_pose_ = pursuit_target;
                         last_command_sent_s_        = now_s;
                         sample_command_sent     = true;
                         sample_commanded_target = pursuit_target.toArray();
                         sample_step_xyz = seg_norm;
-                        sample_step_rot = std::sqrt(v_filt[3]*v_filt[3]*dt*dt +
-                                                    v_filt[4]*v_filt[4]*dt*dt +
-                                                    v_filt[5]*v_filt[5]*dt*dt);
+                        sample_step_rot = rot_norm;
+                        last_emitted_step_xyz_mm_  = seg_norm;
+                        last_emitted_step_rot_deg_ = rot_norm;
                     } else {
                         LOG_W("Pursuit-velocity micro-move refused: %s",
                               robot_.lastError().c_str());
@@ -635,35 +767,56 @@ void Application::tick(double now_s) {
                     sample_skip_reason = "velocity_deadband";
                 }
             } else if (cfg_.micro_pursuit_enabled) {
-                // --- PURSUIT step (legacy position-step path) -----------
-                const double sx  = computeStep(
-                    desired_target_pose_.x  - last_commanded_target_pose_.x,
-                    cfg_.micro_min_step_xyz_mm, cfg_.micro_max_step_xyz_mm,
-                    cfg_.micro_arrival_band_xyz_mm);
-                const double sy  = computeStep(
-                    desired_target_pose_.y  - last_commanded_target_pose_.y,
-                    cfg_.micro_min_step_xyz_mm, cfg_.micro_max_step_xyz_mm,
-                    cfg_.micro_arrival_band_xyz_mm);
-                const double sz  = computeStep(
-                    desired_target_pose_.z  - last_commanded_target_pose_.z,
-                    cfg_.micro_min_step_xyz_mm, cfg_.micro_max_step_xyz_mm,
-                    cfg_.micro_arrival_band_xyz_mm);
-                const double srx = computeStep(
-                    desired_target_pose_.rx - last_commanded_target_pose_.rx,
-                    cfg_.micro_min_step_rot_deg, cfg_.micro_max_step_rot_deg,
-                    cfg_.micro_arrival_band_rot_deg);
-                const double sry = computeStep(
-                    desired_target_pose_.ry - last_commanded_target_pose_.ry,
-                    cfg_.micro_min_step_rot_deg, cfg_.micro_max_step_rot_deg,
-                    cfg_.micro_arrival_band_rot_deg);
-                const double srz = computeStep(
-                    desired_target_pose_.rz - last_commanded_target_pose_.rz,
-                    cfg_.micro_min_step_rot_deg, cfg_.micro_max_step_rot_deg,
-                    cfg_.micro_arrival_band_rot_deg);
+                // --- PURSUIT step (position-step path, no velocity filter) ---
+                // Vector-norm version: compute the full error vector,
+                // skip if its norm is inside the arrival band, otherwise
+                // advance toward it by up to max_step (Euclidean) - never
+                // per-axis. Avoids the sqrt(3)*max bug.
+                double ex = desired_target_pose_.x  - last_commanded_target_pose_.x;
+                double ey = desired_target_pose_.y  - last_commanded_target_pose_.y;
+                double ez = desired_target_pose_.z  - last_commanded_target_pose_.z;
+                double erx = desired_target_pose_.rx - last_commanded_target_pose_.rx;
+                double ery = desired_target_pose_.ry - last_commanded_target_pose_.ry;
+                double erz = desired_target_pose_.rz - last_commanded_target_pose_.rz;
 
-                const bool any_step =
-                    sx != 0.0 || sy != 0.0 || sz != 0.0 ||
-                    srx != 0.0 || sry != 0.0 || srz != 0.0;
+                sample_raw_error = std::array<double, 6>{
+                    ex, ey, ez, erx, ery, erz};
+
+                const double err_xyz_norm = vec3Norm(ex,  ey,  ez);
+                const double err_rot_norm = vec3Norm(erx, ery, erz);
+                sample_raw_step_xyz_mm  = err_xyz_norm;
+                sample_raw_step_rot_deg = err_rot_norm;
+
+                double sx = 0.0, sy = 0.0, sz = 0.0;
+                double srx = 0.0, sry = 0.0, srz = 0.0;
+                if (err_xyz_norm > cfg_.micro_arrival_band_xyz_mm) {
+                    const double max_xyz = cfg_.micro_max_step_xyz_mm;
+                    const double step_xyz = std::max(
+                        std::min(err_xyz_norm,
+                                 cfg_.micro_max_step_xyz_mm),
+                        std::min(cfg_.micro_min_step_xyz_mm, err_xyz_norm));
+                    const double k = err_xyz_norm > 1e-9
+                        ? step_xyz / err_xyz_norm : 0.0;
+                    sx = ex * k; sy = ey * k; sz = ez * k;
+                    if (step_xyz >= max_xyz - 1e-9 && err_xyz_norm > max_xyz)
+                        sample_step_norm_clipped = true;
+                }
+                if (err_rot_norm > cfg_.micro_arrival_band_rot_deg) {
+                    const double max_rot = cfg_.micro_max_step_rot_deg;
+                    const double step_rot = std::max(
+                        std::min(err_rot_norm,
+                                 cfg_.micro_max_step_rot_deg),
+                        std::min(cfg_.micro_min_step_rot_deg, err_rot_norm));
+                    const double k = err_rot_norm > 1e-9
+                        ? step_rot / err_rot_norm : 0.0;
+                    srx = erx * k; sry = ery * k; srz = erz * k;
+                    if (step_rot >= max_rot - 1e-9 && err_rot_norm > max_rot)
+                        sample_step_norm_clipped = true;
+                }
+
+                const double seg_norm = vec3Norm(sx, sy, sz);
+                const double rot_norm = vec3Norm(srx, sry, srz);
+                const bool any_step = seg_norm > 1e-9 || rot_norm > 1e-9;
 
                 if (any_step) {
                     RobotPose pursuit_target = last_commanded_target_pose_;
@@ -674,13 +827,6 @@ void Application::tick(double now_s) {
                     pursuit_target.ry += sry;
                     pursuit_target.rz += srz;
 
-                    // Adaptive blending: shrink the requested radius on
-                    // a small segment so the controller doesn't try to
-                    // round more than the segment itself.
-                    const double seg_norm =
-                        std::sqrt(sx*sx + sy*sy + sz*sz);
-                    const double rot_norm =
-                        std::sqrt(srx*srx + sry*sry + srz*srz);
                     const double radius = cfg_.micro_blending_enabled
                         ? std::min(cfg_.micro_blending_radius_mm,
                                    0.4 * seg_norm)
@@ -691,12 +837,18 @@ void Application::tick(double now_s) {
                             cfg_.micro_lin_vel, cfg_.micro_ang_vel,
                             cfg_.micro_lin_acc, cfg_.micro_ang_acc,
                             radius)) {
+                        sample_command_interval_ms =
+                            (last_command_sent_s_ > 0.0)
+                                ? (now_s - last_command_sent_s_) * 1000.0
+                                : 0.0;
                         last_commanded_target_pose_ = pursuit_target;
                         last_command_sent_s_        = now_s;
                         sample_command_sent     = true;
                         sample_commanded_target = pursuit_target.toArray();
                         sample_step_xyz = seg_norm;
                         sample_step_rot = rot_norm;
+                        last_emitted_step_xyz_mm_  = seg_norm;
+                        last_emitted_step_rot_deg_ = rot_norm;
                     } else {
                         LOG_W("Pursuit micro-move refused by adapter: %s",
                               robot_.lastError().c_str());
@@ -707,7 +859,6 @@ void Application::tick(double now_s) {
                 } else {
                     sample_skip_reason = "arrival_band";
                 }
-                // else: within arrival band on every axis -> nothing to do.
             } else {
                 // --- LEGACY incremental mode ---------------------------
                 std::array<double, 6> twist = {
@@ -716,25 +867,27 @@ void Application::tick(double now_s) {
                 };
                 guard_.clampSpeed(twist);
 
-                auto bound = [](double v, double m) {
-                    if (v >  m) return  m;
-                    if (v < -m) return -m;
-                    return v;
-                };
-                double dx  = bound(twist[0] * elapsed, cfg_.micro_max_delta_xyz_mm);
-                double dy  = bound(twist[1] * elapsed, cfg_.micro_max_delta_xyz_mm);
-                double dz  = bound(twist[2] * elapsed, cfg_.micro_max_delta_xyz_mm);
-                double drx = bound(twist[3] * elapsed, cfg_.micro_max_delta_rot_deg);
-                double dry = bound(twist[4] * elapsed, cfg_.micro_max_delta_rot_deg);
-                double drz = bound(twist[5] * elapsed, cfg_.micro_max_delta_rot_deg);
+                double dx  = twist[0] * elapsed;
+                double dy  = twist[1] * elapsed;
+                double dz  = twist[2] * elapsed;
+                double drx = twist[3] * elapsed;
+                double dry = twist[4] * elapsed;
+                double drz = twist[5] * elapsed;
+
+                sample_raw_step_xyz_mm  = vec3Norm(dx, dy, dz);
+                sample_raw_step_rot_deg = vec3Norm(drx, dry, drz);
+
+                // Vector-norm cap (replaces the per-axis bound() that
+                // produced ~sqrt(3)*cap segments under diagonal motion).
+                const bool clip_xyz = limitVectorNorm3(
+                    dx, dy, dz, cfg_.micro_max_delta_xyz_mm);
+                const bool clip_rot = limitVectorNorm3(
+                    drx, dry, drz, cfg_.micro_max_delta_rot_deg);
+                sample_step_norm_clipped = clip_xyz || clip_rot;
 
                 const bool meaningful =
-                    std::abs(dx)  > cfg_.micro_deadband_mm  ||
-                    std::abs(dy)  > cfg_.micro_deadband_mm  ||
-                    std::abs(dz)  > cfg_.micro_deadband_mm  ||
-                    std::abs(drx) > cfg_.micro_deadband_deg ||
-                    std::abs(dry) > cfg_.micro_deadband_deg ||
-                    std::abs(drz) > cfg_.micro_deadband_deg;
+                    vec3Norm(dx, dy, dz)  > cfg_.micro_deadband_mm ||
+                    vec3Norm(drx, dry, drz) > cfg_.micro_deadband_deg;
 
                 if (meaningful) {
                     virtual_target_pose_.x  += dx;
@@ -750,11 +903,17 @@ void Application::tick(double now_s) {
                             cfg_.micro_lin_vel, cfg_.micro_ang_vel,
                             cfg_.micro_lin_acc, cfg_.micro_ang_acc,
                             radius)) {
+                        sample_command_interval_ms =
+                            (last_command_sent_s_ > 0.0)
+                                ? (now_s - last_command_sent_s_) * 1000.0
+                                : 0.0;
                         last_command_sent_s_ = now_s;
                         sample_command_sent     = true;
                         sample_commanded_target = virtual_target_pose_.toArray();
-                        sample_step_xyz = std::sqrt(dx*dx + dy*dy + dz*dz);
-                        sample_step_rot = std::sqrt(drx*drx + dry*dry + drz*drz);
+                        sample_step_xyz = vec3Norm(dx, dy, dz);
+                        sample_step_rot = vec3Norm(drx, dry, drz);
+                        last_emitted_step_xyz_mm_  = sample_step_xyz;
+                        last_emitted_step_rot_deg_ = sample_step_rot;
                     } else {
                         LOG_W("Micro-move refused by adapter: %s",
                               robot_.lastError().c_str());
@@ -840,7 +999,7 @@ void Application::tick(double now_s) {
             MotionLogSample s;
             s.timestamp_s   = now_s;
             s.dt_ms         = dt_ms;
-            s.tracking_valid = report.sensor_ok && report.freshFrame;
+            s.tracking_valid = tracking_valid_now;
             s.deadman_active = btn;
             s.control_mode   = stateName(cur_state);
             s.command_sent   = sample_command_sent;
@@ -906,6 +1065,33 @@ void Application::tick(double now_s) {
             s.motion_position_scale    = cfg_.position_scale;
             s.motion_orientation_scale = cfg_.orientation_scale;
             s.motion_smoothing_alpha   = cfg_.smoothing_alpha;
+
+            // Extended diagnostics.
+            s.command_interval_ms              = sample_command_interval_ms;
+            s.scheduler_elapsed_ms             = sample_scheduler_elapsed_ms;
+            s.previous_motion_estimated_time_ms = sample_prev_motion_est_ms;
+            s.backlog_guard_active             = sample_backlog_guard_active;
+            const double target_dt_ms = 1000.0 / static_cast<double>(cfg_.loop_rate_hz);
+            s.loop_overrun_ms = std::max(0.0, dt_ms - target_dt_ms);
+            s.cached_actual_pose_age_ms =
+                (last_pose_poll_s_ > 0.0) ? (now_s - last_pose_poll_s_) * 1000.0 : 0.0;
+            // Cached pose is "live" only when we're NOT in active streaming
+            // (active path never polls getCurrentPose, alarm 5.7056).
+            s.actual_pose_live = !cur_active && !ramp_to_zero_;
+
+            s.raw_error         = sample_raw_error;
+            s.desired_velocity  = sample_desired_velocity;
+            s.filtered_velocity = sample_filtered_velocity;
+            s.limited_accel     = sample_limited_accel;
+            s.raw_step_xyz_mm   = sample_raw_step_xyz_mm;
+            s.limited_step_xyz_mm  = sample_step_xyz;
+            s.raw_step_rot_deg  = sample_raw_step_rot_deg;
+            s.limited_step_rot_deg = sample_step_rot;
+            s.velocity_deadband_applied = sample_velocity_deadband_applied;
+            s.jerk_limit_applied        = sample_jerk_limit_applied;
+            s.accel_limit_applied       = sample_accel_limit_applied;
+            s.step_norm_clipped         = sample_step_norm_clipped;
+            s.tracking_stable_age_ms    = tracking_age_s * 1000.0;
 
             motion_logger_.append(s);
         }
