@@ -150,6 +150,20 @@ private:
     // wait min_motion_completion_ratio * t_est before queueing the next.
     double                last_emitted_step_xyz_mm_ = 0.0;
     double                last_emitted_step_rot_deg_= 0.0;
+
+    // --- Brief tracking-loss tolerance ---
+    // last_valid_tracking_s_ is refreshed every tick on which Leap
+    // delivered a fresh frame with the right hand above min_confidence.
+    // The Application uses the AGE since this stamp - not a per-tick
+    // bool - to classify the current tick as "recent", "brief loss",
+    // or "hard loss". tracking_hold_active_ is the latched internal
+    // state that suppresses SM faults and freezes the pursuit target
+    // until the loss either resolves or escalates.
+    double                last_valid_tracking_s_         = -1.0;
+    bool                  tracking_hold_active_          = false;
+    double                tracking_hold_entered_s_       = -1.0;
+    double                tracking_recent_again_s_       = -1.0;
+    int                   recovery_soft_commands_remaining_ = 0;
 };
 
 } // namespace dgd

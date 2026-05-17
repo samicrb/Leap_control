@@ -48,6 +48,14 @@ public:
 
     void reset();
 
+    // When true, evaluateFaults() will NOT return LeftHandLost /
+    // RightHandLost while in an active state. The Application uses
+    // this to soak up brief Leap dropouts (< brief_loss_timeout_s)
+    // without transitioning the SM to FAULT and forcing the operator
+    // to remove and reinsert their hands. Sensor disconnects are
+    // still raised regardless.
+    void setSuppressHandLossFault(bool b) { suppress_hand_loss_fault_ = b; }
+
 private:
     // Guard helpers.
     bool conditionsForPositionControl(const GestureReport& g) const;
@@ -63,6 +71,7 @@ private:
     DemoState     state_        = DemoState::Idle;
     FaultReason   fault_reason_ = FaultReason::None;
     double        state_entered_s_ = 0.0;
+    bool          suppress_hand_loss_fault_ = false;
 };
 
 } // namespace dgd

@@ -111,6 +111,17 @@ struct MotionLogSample {
 
     // Tracking-stability gate.
     double tracking_stable_age_ms = 0.0; // 0 = invalid this tick
+
+    // Brief tracking-loss tolerance diagnostics.
+    bool   tracking_loss_tolerance_enabled = false;
+    bool   tracking_recent                = false;
+    bool   brief_tracking_loss_active     = false;
+    bool   hard_tracking_loss             = false;
+    double tracking_loss_duration_ms      = 0.0;
+    double tracking_recovery_stable_ms    = 0.0;
+    bool   tracking_hold_active           = false;
+    bool   reanchor_performed             = false;
+    bool   recovery_step_limited          = false;
 };
 
 class MotionLogger {

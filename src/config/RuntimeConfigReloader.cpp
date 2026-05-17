@@ -52,6 +52,12 @@ bool validate(const char* key, double v) {
     if (std::strcmp(key, "robot.micro_tracking_recovery_time_s")==0) return v >= 0.0 && v <= 5.0;
     if (std::strcmp(key, "robot.min_motion_completion_ratio")==0) return v >= 0.0 && v <= 1.5;
     if (std::strcmp(key, "robot.max_pending_command_age_s")==0)return v > 0.0 && v <= 5.0;
+    if (std::strcmp(key, "tracking_loss_tolerance.frame_timeout_s")==0) return v >= 0.0 && v <= 1.0;
+    if (std::strcmp(key, "tracking_loss_tolerance.brief_loss_timeout_s")==0) return v >= 0.0 && v <= 5.0;
+    if (std::strcmp(key, "tracking_loss_tolerance.recovery_stability_s")==0) return v >= 0.0 && v <= 2.0;
+    if (std::strcmp(key, "tracking_loss_tolerance.max_recovery_step_xyz_mm")==0) return v >= 0.0 && v <= 50.0;
+    if (std::strcmp(key, "tracking_loss_tolerance.max_recovery_step_rot_deg")==0) return v >= 0.0 && v <= 20.0;
+    if (std::strcmp(key, "tracking_loss_tolerance.recovery_soft_commands")==0) return v >= 0.0 && v <= 100.0;
     return true; // bool-only keys handled separately, defaults pass
 }
 
@@ -181,6 +187,34 @@ bool RuntimeConfigReloader::applyDiff(const Config& fresh) {
     TRY_BOOL  (prevent_command_backlog,    "robot.prevent_command_backlog");
     TRY_DOUBLE(min_motion_completion_ratio,"robot.min_motion_completion_ratio");
     TRY_DOUBLE(max_pending_command_age_s,  "robot.max_pending_command_age_s");
+
+    // --- Brief tracking-loss tolerance (hot-reloadable) ---
+    TRY_BOOL  (tracking_loss_tolerance_enabled,        "tracking_loss_tolerance.enabled");
+    TRY_DOUBLE(tracking_loss_frame_timeout_s,          "tracking_loss_tolerance.frame_timeout_s");
+    TRY_DOUBLE(tracking_loss_brief_timeout_s,          "tracking_loss_tolerance.brief_loss_timeout_s");
+    TRY_DOUBLE(tracking_loss_recovery_stability_s,     "tracking_loss_tolerance.recovery_stability_s");
+    TRY_BOOL  (tracking_loss_freeze_target_on_loss,    "tracking_loss_tolerance.freeze_target_on_loss");
+    TRY_BOOL  (tracking_loss_reanchor_on_recovery,     "tracking_loss_tolerance.reanchor_on_recovery");
+    TRY_BOOL  (tracking_loss_reset_velocity_on_recovery,"tracking_loss_tolerance.reset_velocity_on_recovery");
+    TRY_BOOL  (tracking_loss_ramp_to_zero_on_loss,     "tracking_loss_tolerance.ramp_to_zero_on_loss");
+    TRY_BOOL  (tracking_loss_fault_after_timeout,      "tracking_loss_tolerance.fault_after_timeout");
+    TRY_BOOL  (tracking_loss_require_recenter_after_brief_loss,
+               "tracking_loss_tolerance.require_recenter_after_brief_loss");
+    TRY_DOUBLE(tracking_loss_max_recovery_step_xyz_mm, "tracking_loss_tolerance.max_recovery_step_xyz_mm");
+    TRY_DOUBLE(tracking_loss_max_recovery_step_rot_deg,"tracking_loss_tolerance.max_recovery_step_rot_deg");
+    if (live_->tracking_loss_recovery_soft_commands != fresh.tracking_loss_recovery_soft_commands) {
+        const double cand = static_cast<double>(fresh.tracking_loss_recovery_soft_commands);
+        if (!live_->runtime_tuning_reject_invalid_values ||
+            validate("tracking_loss_tolerance.recovery_soft_commands", cand)) {
+            if (sink_) sink_(fmt("tracking_loss_tolerance.recovery_soft_commands",
+                                 static_cast<double>(live_->tracking_loss_recovery_soft_commands),
+                                 cand));
+            live_->tracking_loss_recovery_soft_commands = fresh.tracking_loss_recovery_soft_commands;
+            ++changes;
+        } else if (sink_) {
+            sink_(fmtReject("tracking_loss_tolerance.recovery_soft_commands", cand));
+        }
+    }
 
     // Step range sanity (max >= min after edits).
     if (live_->micro_max_step_xyz_mm < live_->micro_min_step_xyz_mm) {

@@ -272,28 +272,119 @@ void Application::tick(double now_s) {
     GestureReport report = interpreter_.update(frame, now_s);
     report.freshFrame = fresh;
 
-    // --- Tracking-stability gate -----------------------------------------
-    // tracking_valid_now requires three things:
-    //   1. the sensor reports as connected
-    //   2. THIS tick carried a fresh frame (pollLatest returned true)
-    //   3. the right hand was actually present and above min_confidence
-    // Without all three, the pursuit pipeline must NOT update its desired
-    // target nor emit any amovel - stale samples were the root cause of
-    // commands being sent with tracking_valid=0 in the field logs.
-    const bool tracking_valid_now =
-        report.sensor_ok && report.freshFrame && report.rightPresent;
+    // --- Tracking-stability gate (graded) --------------------------------
+    // last_valid_tracking_s_ ratchets forward on every tick that delivered
+    // a fresh Leap frame AND the right hand was actually present. We then
+    // classify the CURRENT tick by the age of that stamp:
+    //   tracking_recent    : age <= frame_timeout_s   (treat as normal)
+    //   brief_loss_active  : age in [frame_timeout, brief_loss_timeout]
+    //                        and tolerance is enabled
+    //   hard_tracking_loss : age > brief_loss_timeout or tolerance off
+    // This is a single-source-of-truth for what the rest of the tick
+    // does about tracking. It replaces the previous boolean
+    // tracking_valid_now which faulted out on a single dropped frame.
+    if (report.freshFrame && report.sensor_ok && report.rightPresent) {
+        last_valid_tracking_s_ = now_s;
+    }
+    const double tracking_loss_age_s =
+        (last_valid_tracking_s_ < 0.0) ? 1e9
+                                       : (now_s - last_valid_tracking_s_);
+    const bool tolerance_on  = cfg_.tracking_loss_tolerance_enabled;
+    const bool tracking_recent =
+        report.sensor_ok && report.rightPresent &&
+        tracking_loss_age_s <= cfg_.tracking_loss_frame_timeout_s &&
+        last_valid_tracking_s_ >= 0.0;
+    const bool brief_loss_active =
+        tolerance_on && !tracking_recent &&
+        last_valid_tracking_s_ >= 0.0 &&
+        tracking_loss_age_s <= cfg_.tracking_loss_brief_timeout_s;
+    const bool hard_tracking_loss =
+        !tracking_recent && !brief_loss_active;
+
+    // --- Brief-loss hold state machine -----------------------------------
+    bool reanchor_performed = false;
+
+    // Hold entry: first tick that brief_loss_active is true.
+    if (brief_loss_active && !tracking_hold_active_) {
+        tracking_hold_active_   = true;
+        tracking_hold_entered_s_ = now_s;
+        tracking_recent_again_s_ = -1.0;
+        event_logger_.event("tracking lost: entering temporary hold",
+                            cfg_.runtime_tuning_print_changes_to_console);
+        if (cfg_.tracking_loss_freeze_target_on_loss) {
+            event_logger_.event("brief tracking loss: freezing target");
+        }
+        // Optional controlled stop: drive velocity to zero via the
+        // existing ramp_to_zero machinery. NO speedl, NO stopMotion -
+        // ramp tail keeps amovel-only contract.
+        if (cfg_.tracking_loss_ramp_to_zero_on_loss &&
+            cfg_.micro_velocity_filter_enabled &&
+            active_entry_robot_pose_valid_ && !ramp_to_zero_) {
+            ramp_to_zero_ = true;
+            ramp_start_s_ = now_s;
+        }
+    }
+
+    // Hard escalation: brief-loss window exceeded.
+    if (hard_tracking_loss && tracking_hold_active_) {
+        tracking_hold_active_   = false;
+        tracking_recent_again_s_ = -1.0;
+        event_logger_.event(
+            "tracking loss exceeded timeout: escalating to strict behavior",
+            cfg_.runtime_tuning_print_changes_to_console);
+    }
+
+    // Recovery: tracking is back AND it has held long enough.
+    if (tracking_hold_active_ && tracking_recent) {
+        if (tracking_recent_again_s_ < 0.0) {
+            tracking_recent_again_s_ = now_s;
+            event_logger_.event(
+                "tracking recovered: waiting stability window");
+        }
+        const double stable_age = now_s - tracking_recent_again_s_;
+        if (stable_age >= cfg_.tracking_loss_recovery_stability_s) {
+            // Re-anchor: take CURRENT recovered hand pose as the new
+            // gesture reference and pin the robot active-entry pose to
+            // last_commanded_target_pose_ so desired_target = active_entry
+            // + ratio * 0 = active_entry. This single operation prevents
+            // the post-recovery jump caused by accumulated hand motion
+            // during the dropout.
+            if (cfg_.tracking_loss_reanchor_on_recovery &&
+                active_entry_robot_pose_valid_) {
+                interpreter_.captureReference();
+                active_entry_robot_pose_    = last_commanded_target_pose_;
+                desired_target_pose_        = last_commanded_target_pose_;
+                event_logger_.event("tracking recovered: re-anchoring hand reference",
+                                    cfg_.runtime_tuning_print_changes_to_console);
+                reanchor_performed = true;
+            }
+            if (cfg_.tracking_loss_reset_velocity_on_recovery) {
+                filtered_velocity_.fill(0.0);
+                last_accel_.fill(0.0);
+            }
+            ramp_to_zero_ = false;
+            tracking_hold_active_    = false;
+            tracking_recent_again_s_ = -1.0;
+            recovery_soft_commands_remaining_ =
+                std::max(0, cfg_.tracking_loss_recovery_soft_commands);
+            event_logger_.event("tracking recovered: resuming position control",
+                                cfg_.runtime_tuning_print_changes_to_console);
+        }
+    } else if (tracking_hold_active_ && !tracking_recent) {
+        // Wobble during recovery - require the stability window to start over.
+        tracking_recent_again_s_ = -1.0;
+    }
+
+    // Keep the legacy tracking_valid_since_s_ logic so the pursuit re-arm
+    // ("first entry into active") still works. This time window is about
+    // INITIAL arm, separate from brief-loss recovery.
+    const bool tracking_valid_now = tracking_recent;
     if (tracking_valid_now != tracking_valid_last_) {
         if (tracking_valid_now) {
             tracking_valid_since_s_ = now_s;
-            event_logger_.event(
-                "tracking recovered: waiting stability window",
-                cfg_.runtime_tuning_print_changes_to_console);
         } else {
             tracking_valid_since_s_ = -1.0;
             pursuit_armed_          = false;
-            event_logger_.event(
-                "tracking invalid: freezing pursuit",
-                cfg_.runtime_tuning_print_changes_to_console);
         }
         tracking_valid_last_ = tracking_valid_now;
     }
@@ -317,6 +408,12 @@ void Application::tick(double now_s) {
                             cfg_.runtime_tuning_print_changes_to_console);
         prev_btn = btn;
     }
+    // While tolerance is armed and we're inside the brief-loss window,
+    // suppress SM hand-loss FAULTs. The SM remains in POSITION /
+    // ORIENTATION, the Application freezes the pursuit, and the operator
+    // does NOT have to lift-and-show hands on recovery. Sensor disconnects
+    // are still raised (controller safety contract unchanged).
+    sm_.setSuppressHandLossFault(brief_loss_active || tracking_hold_active_);
     CommandOutput cmd = sm_.step(report, btn, now_s);
 
     if (cmd.captureReference) interpreter_.captureReference();
@@ -361,6 +458,7 @@ void Application::tick(double now_s) {
     bool   sample_jerk_limit_applied        = false;
     bool   sample_accel_limit_applied       = false;
     bool   sample_step_norm_clipped         = false;
+    bool   sample_recovery_step_limited_local = false;
 
     // Hard tracking gate: if tracking is not stable AND we're not in
     // a controlled ramp-to-zero tail, freeze the active branch entirely.
@@ -383,16 +481,25 @@ void Application::tick(double now_s) {
         ramp_to_zero_                   = false;
         filtered_velocity_.fill(0.0);
         last_accel_.fill(0.0);
+    } else if (cur_active && tracking_hold_active_ && !ramp_to_zero_) {
+        // Brief tracking-loss tolerance: SM still says cur_active, but
+        // we're masking the hand-loss FAULT and waiting for recovery.
+        // Freeze: do not update desired_target, do not seed, do not emit.
+        // If ramp_to_zero_on_loss is true the ramp_to_zero_ flag was set
+        // and the velocity-filter branch will run with a zero desired
+        // target -> filtered velocity decays naturally.
+        sample_skip_reason = "tracking_hold_freeze";
+        fault_emergency_issued_ = false;
+    } else if (cur_active && !tracking_recent && !ramp_to_zero_) {
+        // Tracking is hard-invalid this tick (either tolerance is off,
+        // or we just escalated). No seeding, no emit, no integration.
+        sample_skip_reason = tolerance_on ? "hard_tracking_loss"
+                                          : "tracking_invalid";
+        fault_emergency_issued_ = false;
     } else if (cur_active && !tracking_stable && !ramp_to_zero_) {
-        // Tracking is not yet stable enough to enter (or remain in)
-        // active pursuit. Freeze: do not seed, do not update the
-        // desired target, do not emit. If we previously WERE active,
-        // the prev_active branch below would normally start the ramp
-        // tail; with no fresh hand data we let the in-flight amovel
-        // (if any) finish on its own. The pursuit will re-arm only
-        // after micro_tracking_recovery_time_s of continuous validity.
-        sample_skip_reason = tracking_valid_now ? "tracking_stabilizing"
-                                                 : "tracking_invalid";
+        // Cold-start: we have valid recent tracking but it has not been
+        // continuously valid long enough to safely re-arm pursuit.
+        sample_skip_reason = "tracking_recovery_wait";
         fault_emergency_issued_ = false;
     } else if (active_branch_eligible && (cur_active || ramp_to_zero_)) {
         // Active control via the MICRO-MOTION SUPERVISOR (with optional
@@ -707,11 +814,23 @@ void Application::tick(double now_s) {
 
                     // 8. Vector-norm cap. Replaces the previous implicit
                     // per-axis cap which let segments grow to ~sqrt(3)*max.
+                    // For the first recovery_soft_commands_remaining_ ticks
+                    // after a brief-loss recovery, use the much tighter
+                    // recovery caps so the robot eases back into motion.
+                    const bool in_soft_recovery =
+                        recovery_soft_commands_remaining_ > 0;
+                    const double xyz_cap = in_soft_recovery
+                        ? cfg_.tracking_loss_max_recovery_step_xyz_mm
+                        : cfg_.micro_max_step_xyz_mm;
+                    const double rot_cap = in_soft_recovery
+                        ? cfg_.tracking_loss_max_recovery_step_rot_deg
+                        : cfg_.micro_max_step_rot_deg;
                     const bool clip_xyz = limitVectorNorm3(
-                        dx, dy, dz, cfg_.micro_max_step_xyz_mm);
+                        dx, dy, dz, xyz_cap);
                     const bool clip_rot = limitVectorNorm3(
-                        drx, dry, drz, cfg_.micro_max_step_rot_deg);
+                        drx, dry, drz, rot_cap);
                     sample_step_norm_clipped = clip_xyz || clip_rot;
+                    sample_recovery_step_limited_local = in_soft_recovery;
 
                     RobotPose pursuit_target = last_commanded_target_pose_;
                     pursuit_target.x  += dx;
@@ -756,6 +875,8 @@ void Application::tick(double now_s) {
                         sample_step_rot = rot_norm;
                         last_emitted_step_xyz_mm_  = seg_norm;
                         last_emitted_step_rot_deg_ = rot_norm;
+                        if (recovery_soft_commands_remaining_ > 0)
+                            --recovery_soft_commands_remaining_;
                     } else {
                         LOG_W("Pursuit-velocity micro-move refused: %s",
                               robot_.lastError().c_str());
@@ -787,30 +908,39 @@ void Application::tick(double now_s) {
                 sample_raw_step_xyz_mm  = err_xyz_norm;
                 sample_raw_step_rot_deg = err_rot_norm;
 
+                // Soft-cap during the recovery window: tighter caps for
+                // the first N commands so the first move out of hold is
+                // gentle.
+                const bool in_soft_recovery =
+                    recovery_soft_commands_remaining_ > 0;
+                sample_recovery_step_limited_local = in_soft_recovery;
+                const double cap_xyz = in_soft_recovery
+                    ? cfg_.tracking_loss_max_recovery_step_xyz_mm
+                    : cfg_.micro_max_step_xyz_mm;
+                const double cap_rot = in_soft_recovery
+                    ? cfg_.tracking_loss_max_recovery_step_rot_deg
+                    : cfg_.micro_max_step_rot_deg;
+
                 double sx = 0.0, sy = 0.0, sz = 0.0;
                 double srx = 0.0, sry = 0.0, srz = 0.0;
                 if (err_xyz_norm > cfg_.micro_arrival_band_xyz_mm) {
-                    const double max_xyz = cfg_.micro_max_step_xyz_mm;
                     const double step_xyz = std::max(
-                        std::min(err_xyz_norm,
-                                 cfg_.micro_max_step_xyz_mm),
+                        std::min(err_xyz_norm, cap_xyz),
                         std::min(cfg_.micro_min_step_xyz_mm, err_xyz_norm));
                     const double k = err_xyz_norm > 1e-9
                         ? step_xyz / err_xyz_norm : 0.0;
                     sx = ex * k; sy = ey * k; sz = ez * k;
-                    if (step_xyz >= max_xyz - 1e-9 && err_xyz_norm > max_xyz)
+                    if (step_xyz >= cap_xyz - 1e-9 && err_xyz_norm > cap_xyz)
                         sample_step_norm_clipped = true;
                 }
                 if (err_rot_norm > cfg_.micro_arrival_band_rot_deg) {
-                    const double max_rot = cfg_.micro_max_step_rot_deg;
                     const double step_rot = std::max(
-                        std::min(err_rot_norm,
-                                 cfg_.micro_max_step_rot_deg),
+                        std::min(err_rot_norm, cap_rot),
                         std::min(cfg_.micro_min_step_rot_deg, err_rot_norm));
                     const double k = err_rot_norm > 1e-9
                         ? step_rot / err_rot_norm : 0.0;
                     srx = erx * k; sry = ery * k; srz = erz * k;
-                    if (step_rot >= max_rot - 1e-9 && err_rot_norm > max_rot)
+                    if (step_rot >= cap_rot - 1e-9 && err_rot_norm > cap_rot)
                         sample_step_norm_clipped = true;
                 }
 
@@ -849,6 +979,8 @@ void Application::tick(double now_s) {
                         sample_step_rot = rot_norm;
                         last_emitted_step_xyz_mm_  = seg_norm;
                         last_emitted_step_rot_deg_ = rot_norm;
+                        if (recovery_soft_commands_remaining_ > 0)
+                            --recovery_soft_commands_remaining_;
                     } else {
                         LOG_W("Pursuit micro-move refused by adapter: %s",
                               robot_.lastError().c_str());
@@ -1092,6 +1224,23 @@ void Application::tick(double now_s) {
             s.accel_limit_applied       = sample_accel_limit_applied;
             s.step_norm_clipped         = sample_step_norm_clipped;
             s.tracking_stable_age_ms    = tracking_age_s * 1000.0;
+
+            // Brief tracking-loss tolerance diagnostics.
+            s.tracking_loss_tolerance_enabled = cfg_.tracking_loss_tolerance_enabled;
+            s.tracking_recent             = tracking_recent;
+            s.brief_tracking_loss_active  = brief_loss_active;
+            s.hard_tracking_loss          = hard_tracking_loss;
+            s.tracking_loss_duration_ms   =
+                (last_valid_tracking_s_ < 0.0)
+                    ? 0.0 : tracking_loss_age_s * 1000.0;
+            s.tracking_recovery_stable_ms =
+                (tracking_hold_active_ && tracking_recent_again_s_ > 0.0)
+                    ? (now_s - tracking_recent_again_s_) * 1000.0
+                    : 0.0;
+            s.tracking_hold_active        = tracking_hold_active_;
+            s.reanchor_performed          = reanchor_performed;
+            s.recovery_step_limited       = sample_recovery_step_limited_local
+                                            && sample_command_sent;
 
             motion_logger_.append(s);
         }

@@ -302,6 +302,40 @@ bool loadConfig(const std::string& path, Config& c) {
     c.max_pending_command_age_s   = dGet("robot.max_pending_command_age_s",
                                          c.max_pending_command_age_s);
 
+    // [tracking_loss_tolerance] - canonical keys use the section.key form
+    // directly because the parser already prefixes bare keys under a
+    // section with "section." (Config.cpp parser).
+    c.tracking_loss_tolerance_enabled = bGet("tracking_loss_tolerance.enabled",
+                                              c.tracking_loss_tolerance_enabled);
+    c.tracking_loss_frame_timeout_s   = dGet("tracking_loss_tolerance.frame_timeout_s",
+                                              c.tracking_loss_frame_timeout_s);
+    c.tracking_loss_brief_timeout_s   = dGet("tracking_loss_tolerance.brief_loss_timeout_s",
+                                              c.tracking_loss_brief_timeout_s);
+    c.tracking_loss_recovery_stability_s = dGet("tracking_loss_tolerance.recovery_stability_s",
+                                                  c.tracking_loss_recovery_stability_s);
+    c.tracking_loss_freeze_target_on_loss = bGet("tracking_loss_tolerance.freeze_target_on_loss",
+                                                  c.tracking_loss_freeze_target_on_loss);
+    c.tracking_loss_reanchor_on_recovery  = bGet("tracking_loss_tolerance.reanchor_on_recovery",
+                                                  c.tracking_loss_reanchor_on_recovery);
+    c.tracking_loss_reset_velocity_on_recovery = bGet("tracking_loss_tolerance.reset_velocity_on_recovery",
+                                                       c.tracking_loss_reset_velocity_on_recovery);
+    c.tracking_loss_ramp_to_zero_on_loss  = bGet("tracking_loss_tolerance.ramp_to_zero_on_loss",
+                                                  c.tracking_loss_ramp_to_zero_on_loss);
+    c.tracking_loss_fault_after_timeout   = bGet("tracking_loss_tolerance.fault_after_timeout",
+                                                  c.tracking_loss_fault_after_timeout);
+    c.tracking_loss_require_recenter_after_brief_loss =
+        bGet("tracking_loss_tolerance.require_recenter_after_brief_loss",
+             c.tracking_loss_require_recenter_after_brief_loss);
+    c.tracking_loss_max_recovery_step_xyz_mm =
+        dGet("tracking_loss_tolerance.max_recovery_step_xyz_mm",
+             c.tracking_loss_max_recovery_step_xyz_mm);
+    c.tracking_loss_max_recovery_step_rot_deg =
+        dGet("tracking_loss_tolerance.max_recovery_step_rot_deg",
+             c.tracking_loss_max_recovery_step_rot_deg);
+    c.tracking_loss_recovery_soft_commands =
+        iGet("tracking_loss_tolerance.recovery_soft_commands",
+             c.tracking_loss_recovery_soft_commands);
+
     c.logging_enabled             = bGet("logging.enabled",              c.logging_enabled);
     c.logging_directory           = sGet("logging.log_directory",        c.logging_directory);
     c.logging_experiment_name     = sGet("logging.experiment_name",      c.logging_experiment_name);

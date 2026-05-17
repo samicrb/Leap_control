@@ -98,6 +98,41 @@ int main() {
             /*button=*/true, t++);
     expectState(sm, DemoState::Fault, "sensor disconnected -> fault");
 
+    // --- Brief-loss tolerance: suppressHandLossFault keeps the SM in
+    //     POSITION when the right hand briefly drops out, instead of
+    //     transitioning to FAULT.
+    StateMachine sm2(cfg);
+    double t2 = 0.0;
+    // Engage.
+    sm2.step(makeReport(true, false, HandPosture::Unknown, false, HandPosture::Unknown),
+             /*button=*/true, t2++);
+    sm2.step(makeReport(true, true, HandPosture::Open, true, HandPosture::Closed),
+             /*button=*/true, t2++);
+    expectState(sm2, DemoState::PositionControl, "tolerance: engaged");
+    // With suppression OFF: a missing right hand transitions to Fault.
+    sm2.step(makeReport(true, true, HandPosture::Open, false, HandPosture::Unknown),
+             /*button=*/true, t2++);
+    expectState(sm2, DemoState::Fault, "tolerance off: right hand lost -> fault");
+
+    StateMachine sm3(cfg);
+    double t3 = 0.0;
+    sm3.step(makeReport(true, false, HandPosture::Unknown, false, HandPosture::Unknown),
+             /*button=*/true, t3++);
+    sm3.step(makeReport(true, true, HandPosture::Open, true, HandPosture::Closed),
+             /*button=*/true, t3++);
+    expectState(sm3, DemoState::PositionControl, "tolerance on: engaged");
+    sm3.setSuppressHandLossFault(true);
+    // With suppression ON: same missing-right-hand sample stays in POSITION.
+    sm3.step(makeReport(true, true, HandPosture::Open, false, HandPosture::Unknown),
+             /*button=*/true, t3++);
+    expectState(sm3, DemoState::PositionControl,
+                "tolerance on: right hand briefly lost stays in POSITION");
+    // Sensor disconnect must STILL fault regardless of suppression.
+    sm3.step(makeReport(false, true, HandPosture::Open, false, HandPosture::Unknown),
+             /*button=*/true, t3++);
+    expectState(sm3, DemoState::Fault,
+                "tolerance on: sensor disconnect still faults");
+
     std::printf("All state machine smoke tests passed.\n");
     return 0;
 }

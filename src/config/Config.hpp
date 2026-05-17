@@ -191,6 +191,37 @@ struct Config {
     // oscillation seen on borderline confidence values.
     double micro_tracking_recovery_time_s = 0.30;
 
+    // --- Brief tracking-loss tolerance ------------------------------------
+    // When enabled, short Leap dropouts (typical for an open-house demo
+    // where the operator moves their hand near the edge of the working
+    // volume) do NOT push the SM into FAULT. Instead the Application
+    // enters an internal "tracking_hold" - target frozen, velocity ramped
+    // to zero - and re-anchors the hand reference on recovery so the
+    // robot does not jump.
+    bool   tracking_loss_tolerance_enabled         = true;
+    // Duration past last fresh valid frame before tracking is considered
+    // temporarily lost. Single non-fresh ticks (sub-frame jitter at the
+    // 60 Hz loop) should not invalidate tracking.
+    double tracking_loss_frame_timeout_s           = 0.15;
+    // Max duration of tolerated loss. Beyond this we escalate to the
+    // existing strict behaviour (SM FAULT, lift-and-show recovery).
+    double tracking_loss_brief_timeout_s           = 0.50;
+    // How long tracking must be valid again before motion resumes after
+    // a brief-loss hold.
+    double tracking_loss_recovery_stability_s      = 0.10;
+    // Behavioural toggles.
+    bool   tracking_loss_freeze_target_on_loss     = true;
+    bool   tracking_loss_reanchor_on_recovery      = true;
+    bool   tracking_loss_reset_velocity_on_recovery= true;
+    bool   tracking_loss_ramp_to_zero_on_loss      = true;
+    bool   tracking_loss_fault_after_timeout       = true;
+    bool   tracking_loss_require_recenter_after_brief_loss = false;
+    // First N amovel commands after recovery use these tighter step caps
+    // (Euclidean norm) so the robot resumes from zero/near-zero softly.
+    double tracking_loss_max_recovery_step_xyz_mm  = 2.0;
+    double tracking_loss_max_recovery_step_rot_deg = 0.5;
+    int    tracking_loss_recovery_soft_commands    = 3;
+
     // --- Command-backlog guard -------------------------------------------
     // The amovel scheduler estimates how long the previously emitted
     // segment will take to execute (max(step_xyz/v_lin, step_rot/v_ang))

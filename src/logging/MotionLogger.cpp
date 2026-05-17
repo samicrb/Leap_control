@@ -89,7 +89,11 @@ const char* kHeader =
     "limited_accel_rx,limited_accel_ry,limited_accel_rz,"
     "raw_step_xyz_mm,limited_step_xyz_mm,raw_step_rot_deg,limited_step_rot_deg,"
     "velocity_deadband_applied,jerk_limit_applied,accel_limit_applied,"
-    "step_norm_clipped,tracking_stable_age_ms\n";
+    "step_norm_clipped,tracking_stable_age_ms,"
+    "tracking_loss_tolerance_enabled,tracking_recent,"
+    "brief_tracking_loss_active,hard_tracking_loss,"
+    "tracking_loss_duration_ms,tracking_recovery_stable_ms,"
+    "tracking_hold_active,reanchor_performed,recovery_step_limited\n";
 
 void writeVec3(std::FILE* f, const std::optional<std::array<double, 3>>& v) {
     if (v) {
@@ -238,7 +242,7 @@ void MotionLogger::append(const MotionLogSample& s) {
     writeVec6(file_, s.limited_accel);
 
     std::fprintf(file_,
-                 ",%.4f,%.4f,%.4f,%.4f,%d,%d,%d,%d,%.3f\n",
+                 ",%.4f,%.4f,%.4f,%.4f,%d,%d,%d,%d,%.3f",
                  s.raw_step_xyz_mm, s.limited_step_xyz_mm,
                  s.raw_step_rot_deg, s.limited_step_rot_deg,
                  s.velocity_deadband_applied ? 1 : 0,
@@ -246,6 +250,18 @@ void MotionLogger::append(const MotionLogSample& s) {
                  s.accel_limit_applied ? 1 : 0,
                  s.step_norm_clipped ? 1 : 0,
                  s.tracking_stable_age_ms);
+
+    std::fprintf(file_,
+                 ",%d,%d,%d,%d,%.3f,%.3f,%d,%d,%d\n",
+                 s.tracking_loss_tolerance_enabled ? 1 : 0,
+                 s.tracking_recent ? 1 : 0,
+                 s.brief_tracking_loss_active ? 1 : 0,
+                 s.hard_tracking_loss ? 1 : 0,
+                 s.tracking_loss_duration_ms,
+                 s.tracking_recovery_stable_ms,
+                 s.tracking_hold_active ? 1 : 0,
+                 s.reanchor_performed ? 1 : 0,
+                 s.recovery_step_limited ? 1 : 0);
 
     if (++pending_ >= flush_every_n_) flush();
 }
