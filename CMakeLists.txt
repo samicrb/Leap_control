@@ -55,6 +55,9 @@ set(APP_SOURCES
     src/state/StateMachine.cpp
     src/robot/DrflRobotController.cpp
     src/robot/WorkspaceGuard.cpp
+    src/gripper/GripperFactory.cpp
+    src/gripper/NoopGripper.cpp
+    src/gripper/QbSoftHandIndustryGripper.cpp
     src/gripper/ToolIoGripperController.cpp
     src/input/KeyboardButton.cpp
     src/logging/EventLogger.cpp
@@ -143,9 +146,24 @@ add_executable(vector_norm_limiter_test
 )
 target_include_directories(vector_norm_limiter_test PRIVATE src)
 
+# Gripper factory selection test. Pulls in just the factory + the three
+# gripper backends; the robot adapter is replaced by an in-test stub so
+# no DRFL link is required.
+add_executable(gripper_factory_test
+    test/gripper_factory_test.cpp
+    src/gripper/GripperFactory.cpp
+    src/gripper/NoopGripper.cpp
+    src/gripper/QbSoftHandIndustryGripper.cpp
+    src/gripper/ToolIoGripperController.cpp
+    src/config/Config.cpp
+    src/util/Logger.cpp
+)
+target_include_directories(gripper_factory_test PRIVATE src)
+
 enable_testing()
 add_test(NAME state_machine_smoke      COMMAND state_machine_smoke_test)
 add_test(NAME vector_norm_limiter      COMMAND vector_norm_limiter_test)
+add_test(NAME gripper_factory          COMMAND gripper_factory_test)
 
 # Copy config next to binary so the demo can be launched directly.
 add_custom_command(TARGET doosan_gesture_demo POST_BUILD

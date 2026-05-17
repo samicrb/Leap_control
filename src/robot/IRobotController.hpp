@@ -28,6 +28,23 @@ public:
     // startup and after a fault). BLOCKING.
     virtual bool moveHome(const RobotPose& safe) = 0;
 
+    // Apply a TCP definition that ALREADY exists on the Doosan controller
+    // (created manually via the pendant / DART). The adapter wraps DRFL
+    // set_tcp(name). Returns false if the controller refuses (typically
+    // because the name does not exist). NEVER creates or modifies a TCP
+    // entry on the controller side. Empty `name` is a no-op success.
+    virtual bool setTcp(const std::string& name) {
+        (void)name; return true;
+    }
+
+    // Apply a Tool Weight definition that ALREADY exists on the Doosan
+    // controller. Wraps DRFL set_tool(name). Same contract as setTcp:
+    // does not create / modify controller-side entries; empty name is a
+    // no-op success.
+    virtual bool setToolWeight(const std::string& name) {
+        (void)name; return true;
+    }
+
     // --- Streaming control ---------------------------------------------
     // Request a Cartesian velocity (mm/s, deg/s) in the base frame.
     // Adapter is responsible for forwarding this to the robot's

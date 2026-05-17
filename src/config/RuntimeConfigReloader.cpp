@@ -58,6 +58,11 @@ bool validate(const char* key, double v) {
     if (std::strcmp(key, "tracking_loss_tolerance.max_recovery_step_xyz_mm")==0) return v >= 0.0 && v <= 50.0;
     if (std::strcmp(key, "tracking_loss_tolerance.max_recovery_step_rot_deg")==0) return v >= 0.0 && v <= 20.0;
     if (std::strcmp(key, "tracking_loss_tolerance.recovery_soft_commands")==0) return v >= 0.0 && v <= 100.0;
+    if (std::strcmp(key, "robot.micro_velocity_filter_alpha")==0) return v >= 0.0 && v <= 1.0;
+    if (std::strcmp(key, "robot.micro_max_jerk_xyz")==0)          return v > 0.0 && v <= 100000.0;
+    if (std::strcmp(key, "robot.micro_max_jerk_rot")==0)          return v > 0.0 && v <= 30000.0;
+    if (std::strcmp(key, "robot.micro_velocity_deadband_mm_s")==0)return v >= 0.0 && v <= 100.0;
+    if (std::strcmp(key, "robot.micro_stop_ramp_time_s")==0)      return v >= 0.0 && v <= 5.0;
     return true; // bool-only keys handled separately, defaults pass
 }
 
@@ -187,6 +192,16 @@ bool RuntimeConfigReloader::applyDiff(const Config& fresh) {
     TRY_BOOL  (prevent_command_backlog,    "robot.prevent_command_backlog");
     TRY_DOUBLE(min_motion_completion_ratio,"robot.min_motion_completion_ratio");
     TRY_DOUBLE(max_pending_command_age_s,  "robot.max_pending_command_age_s");
+
+    // Velocity-filter master switch and gains. Safe to flip at runtime:
+    // turning it off mid-run reverts the next tick to the pure pursuit
+    // step path; turning it on rebuilds its state from filtered_velocity_=0.
+    TRY_BOOL  (micro_velocity_filter_enabled, "robot.micro_velocity_filter_enabled");
+    TRY_DOUBLE(micro_velocity_filter_alpha,   "robot.micro_velocity_filter_alpha");
+    TRY_DOUBLE(micro_max_jerk_xyz,            "robot.micro_max_jerk_xyz");
+    TRY_DOUBLE(micro_max_jerk_rot,            "robot.micro_max_jerk_rot");
+    TRY_DOUBLE(micro_velocity_deadband_mm_s,  "robot.micro_velocity_deadband_mm_s");
+    TRY_DOUBLE(micro_stop_ramp_time_s,        "robot.micro_stop_ramp_time_s");
 
     // --- Brief tracking-loss tolerance (hot-reloadable) ---
     TRY_BOOL  (tracking_loss_tolerance_enabled,        "tracking_loss_tolerance.enabled");

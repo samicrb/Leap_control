@@ -34,6 +34,8 @@ public:
     bool engage() override;
     void disengage() override;
     bool moveHome(const RobotPose& safe) override;
+    bool setTcp(const std::string& name) override;
+    bool setToolWeight(const std::string& name) override;
 
     bool sendCartesianVelocity(const std::array<double, 6>& twist) override;
     void stopMotion() override;

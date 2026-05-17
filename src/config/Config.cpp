@@ -190,6 +190,10 @@ bool loadConfig(const std::string& path, Config& c) {
     c.robot_model        = sGet("robot.model", c.robot_model);
     c.connect_timeout_s  = dGet("robot.connect_timeout_s", c.connect_timeout_s);
     c.skip_move_home     = bGet("robot.skip_move_home", c.skip_move_home);
+    c.return_home_on_start    = bGet("robot.return_home_on_start",
+                                     c.return_home_on_start);
+    c.return_home_on_shutdown = bGet("robot.return_home_on_shutdown",
+                                     c.return_home_on_shutdown);
     c.collision_sensitivity = iGet("robot.collision_sensitivity", c.collision_sensitivity);
     c.singularity_handling  = iGet("robot.singularity_handling",  c.singularity_handling);
     c.home_use_movejx       = bGet("robot.home_use_movejx",       c.home_use_movejx);
@@ -246,6 +250,24 @@ bool loadConfig(const std::string& path, Config& c) {
     c.gripper_gesture_hold_s = dGet("gripper.gesture_hold_s", c.gripper_gesture_hold_s);
     c.gripper_open_do_index  = iGet("gripper.open_do_index",  c.gripper_open_do_index);
     c.gripper_close_do_index = iGet("gripper.close_do_index", c.gripper_close_do_index);
+
+    // --- Vendor / optional gripper selection ---
+    c.gripper_enabled              = bGet("gripper.enabled",              c.gripper_enabled);
+    c.gripper_type                 = sGet("gripper.type",                 c.gripper_type);
+    c.gripper_backend              = sGet("gripper.backend",              c.gripper_backend);
+    c.gripper_ip                   = sGet("gripper.ip",                   c.gripper_ip);
+    c.gripper_open_position        = dGet("gripper.open_position",        c.gripper_open_position);
+    c.gripper_close_position       = dGet("gripper.close_position",       c.gripper_close_position);
+    c.gripper_pregrasp_position    = dGet("gripper.pregrasp_position",    c.gripper_pregrasp_position);
+    c.gripper_close_speed_percent  = dGet("gripper.close_speed_percent",  c.gripper_close_speed_percent);
+    c.gripper_close_force_percent  = dGet("gripper.close_force_percent",  c.gripper_close_force_percent);
+    c.gripper_command_timeout_s    = dGet("gripper.command_timeout_s",    c.gripper_command_timeout_s);
+    c.gripper_wait_for_target      = bGet("gripper.wait_for_target",      c.gripper_wait_for_target);
+
+    // --- Tool (TCP + Tool Weight) ---
+    c.tool_apply_on_start   = bGet("tool.apply_on_start",   c.tool_apply_on_start);
+    c.tool_tcp_name         = sGet("tool.tcp_name",         c.tool_tcp_name);
+    c.tool_tool_weight_name = sGet("tool.tool_weight_name", c.tool_tool_weight_name);
 
     c.button_mode = sGet("button.mode", c.button_mode);
     c.button_key  = sGet("button.keyboard_key", c.button_key);

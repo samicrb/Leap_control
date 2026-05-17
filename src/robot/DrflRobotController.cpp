@@ -364,6 +364,74 @@ bool DrflRobotController::moveHome(const RobotPose& safe) {
     return true;
 }
 
+// Apply a TCP definition that ALREADY exists on the Doosan controller.
+// Wraps DRFL set_tcp(name). Returns false if DRFL rejects the call -
+// typically because the named entry does not exist on the controller.
+// Never creates or modifies TCP entries.
+bool DrflRobotController::setTcp(const std::string& name) {
+    if (name.empty()) {
+        LOG_I("TCP application skipped: empty name");
+        return true;
+    }
+    if (!connected_.load()) {
+        last_error_ = "setTcp: not connected";
+        LOG_E("%s (name='%s')", last_error_.c_str(), name.c_str());
+        return false;
+    }
+    LOG_I("Applying TCP: %s", name.c_str());
+#if defined(HAVE_DRFL) && HAVE_DRFL
+    if (g_access_grant.load() != 1) {
+        last_error_ = "setTcp: no access control authority";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
+    if (!p_->drfl.set_tcp(name.c_str())) {
+        last_error_ = "DRFL set_tcp() refused name '" + name +
+                      "'. The TCP MUST already exist on the controller "
+                      "(pendant -> Setting -> Robot -> TCP). This program "
+                      "does not create TCP entries.";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
+#else
+    LOG_I("[SIM] set_tcp(\"%s\")", name.c_str());
+#endif
+    return true;
+}
+
+// Apply a Tool Weight definition that ALREADY exists on the controller.
+// Wraps DRFL set_tool(name). Same constraints as setTcp.
+bool DrflRobotController::setToolWeight(const std::string& name) {
+    if (name.empty()) {
+        LOG_I("Tool Weight application skipped: empty name");
+        return true;
+    }
+    if (!connected_.load()) {
+        last_error_ = "setToolWeight: not connected";
+        LOG_E("%s (name='%s')", last_error_.c_str(), name.c_str());
+        return false;
+    }
+    LOG_I("Applying Tool Weight: %s", name.c_str());
+#if defined(HAVE_DRFL) && HAVE_DRFL
+    if (g_access_grant.load() != 1) {
+        last_error_ = "setToolWeight: no access control authority";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
+    if (!p_->drfl.set_tool(name.c_str())) {
+        last_error_ = "DRFL set_tool() refused name '" + name +
+                      "'. The Tool Weight MUST already exist on the "
+                      "controller (pendant -> Setting -> Robot -> Tool). "
+                      "This program does not create Tool Weight entries.";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
+#else
+    LOG_I("[SIM] set_tool(\"%s\")", name.c_str());
+#endif
+    return true;
+}
+
 bool DrflRobotController::sendCartesianVelocity(const std::array<double, 6>& twist) {
     if (!connected_.load() || !engaged_.load()) return false;
 

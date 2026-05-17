@@ -19,6 +19,13 @@ struct Config {
     // collision check: the demo then keeps whatever pose the robot is
     // already in and runs gestures from there.
     bool        skip_move_home = false;
+    // Positive-named, demo-safe master switches for the home approach.
+    // Defaults FALSE so a fresh deployment never moves the robot on its
+    // own. Effective rule (Application::initialise):
+    //   move_home_now = return_home_on_start && !skip_move_home
+    // This preserves backward compat for INIs that only set skip_move_home.
+    bool        return_home_on_start    = false;
+    bool        return_home_on_shutdown = false;
     // Collision detection sensitivity (0..100). 0 disables collision
     // detection entirely - the only reliable bring-up value when the
     // controller-side payload / TCP info isn't known yet and gentle
@@ -167,7 +174,11 @@ struct Config {
     // visibly between segments.
     //
     // Disable to revert to the pure position-step pursuit controller.
-    bool   micro_velocity_filter_enabled = true;
+    // DEFAULT FALSE in this branch: with the vector-norm cap, the
+    // step-based pursuit produces cleanly bounded motions on its own,
+    // and the field demo currently prioritises reliable motion over
+    // velocity-smoothed feel.
+    bool   micro_velocity_filter_enabled = false;
     // Low-pass filter alpha on the desired velocity (1 = no filtering,
     // 0 = infinite filtering / frozen). Lower = smoother but laggier.
     double micro_velocity_filter_alpha   = 0.35;
@@ -235,6 +246,38 @@ struct Config {
     // pending after this many seconds, force-release the guard so the
     // pursuit doesn't stall forever.
     double max_pending_command_age_s   = 0.35;
+
+    // --- Tool (TCP + Tool Weight) --------------------------------------
+    // The TCP and Tool Weight MUST already exist on the Doosan controller
+    // (pendant -> Setting -> Robot -> Tool / TCP). The Application only
+    // APPLIES the configured names via DRFL set_tcp() / set_tool(). It
+    // NEVER creates entries, never calls add_tcp / add_tool, and never
+    // modifies the controller-side definitions. Empty name = skip.
+    bool        tool_apply_on_start   = true;
+    std::string tool_tcp_name         = "";
+    std::string tool_tool_weight_name = "";
+
+    // --- Gripper (optional, vendor-agnostic) -----------------------------
+    // gripper_enabled = false: the demo behaves exactly as if no gripper
+    // were present. NoopGripper is used; no SDK / library is required.
+    // gripper_enabled = true:  the configured backend is constructed.
+    //   type    : informative tag (e.g. "qb_softhand_industry", "tool_io")
+    //   backend : selects the actual implementation
+    //             "none"   - NoopGripper (logging-only, no I/O)
+    //             "tool_io"- ToolIoGripperController (existing DRFL tool DO)
+    // The remaining qb_* parameters are stubs for a future UDP/API
+    // backend; they are loaded today so a fresh INI keeps the slots.
+    bool        gripper_enabled         = false;
+    std::string gripper_type            = "qb_softhand_industry";
+    std::string gripper_backend         = "none";
+    std::string gripper_ip              = "192.168.1.110";
+    double      gripper_open_position   = 0.0;
+    double      gripper_close_position  = 100.0;
+    double      gripper_pregrasp_position = 40.0;
+    double      gripper_close_speed_percent = 50.0;
+    double      gripper_close_force_percent = 75.0;
+    double      gripper_command_timeout_s   = 1.5;
+    bool        gripper_wait_for_target     = false;
 
     // --- Motion logging (CSV + event log) ---------------------------------
     // When logging_enabled = false, no files are opened and the logging

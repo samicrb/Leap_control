@@ -111,13 +111,67 @@ bool Application::initialise() {
         LOG_E("Robot engage failed: %s", robot_.lastError().c_str());
         return false;
     }
+
+    // --- Apply TCP / Tool Weight ------------------------------------
+    // Both objects MUST already exist on the Doosan controller (created
+    // via the pendant / DART). This program never creates them. A
+    // failure here is fatal for the demo: continuing with the wrong TCP
+    // would cause unsafe Cartesian motion.
+    if (cfg_.tool_apply_on_start) {
+        if (!cfg_.tool_tcp_name.empty()) {
+            if (!robot_.setTcp(cfg_.tool_tcp_name)) {
+                LOG_E("Tool/TCP application failed: %s",
+                      robot_.lastError().c_str());
+                LOG_E("Hint: the TCP '%s' must already exist on the "
+                      "Doosan controller (pendant -> Setting -> Robot "
+                      "-> TCP). This program does NOT create TCP "
+                      "entries. Aborting startup.",
+                      cfg_.tool_tcp_name.c_str());
+                event_logger_.event("TCP application failed - safe abort");
+                return false;
+            }
+        } else {
+            LOG_I("TCP application skipped: empty name or apply_on_start=false.");
+        }
+
+        if (!cfg_.tool_tool_weight_name.empty()) {
+            if (!robot_.setToolWeight(cfg_.tool_tool_weight_name)) {
+                LOG_E("Tool Weight application failed: %s",
+                      robot_.lastError().c_str());
+                LOG_E("Hint: the Tool Weight '%s' must already exist on "
+                      "the Doosan controller (pendant -> Setting -> "
+                      "Robot -> Tool). This program does NOT create "
+                      "Tool Weight entries. Aborting startup.",
+                      cfg_.tool_tool_weight_name.c_str());
+                event_logger_.event("Tool Weight application failed - safe abort");
+                return false;
+            }
+        } else {
+            LOG_I("Tool Weight application skipped: empty name or apply_on_start=false.");
+        }
+    } else {
+        LOG_I("TCP application skipped: empty name or apply_on_start=false.");
+        LOG_I("Tool Weight application skipped: empty name or apply_on_start=false.");
+    }
+
+    // --- Home approach --------------------------------------------------
+    // The robot must NOT auto-move unless the operator explicitly opted
+    // in via return_home_on_start. skip_move_home (legacy boolean) is
+    // kept as an additional veto so existing INIs that disable the
+    // move continue to do so.
+    const bool do_move_home = cfg_.return_home_on_start && !cfg_.skip_move_home;
     RobotPose safe{cfg_.safe_x, cfg_.safe_y, cfg_.safe_z,
                    cfg_.safe_rx, cfg_.safe_ry, cfg_.safe_rz};
-    if (cfg_.skip_move_home) {
-        LOG_I("moveHome skipped (robot.skip_move_home=true).");
+    if (!do_move_home) {
+        LOG_I("Return-home on start skipped (return_home_on_start=%s, "
+              "skip_move_home=%s). Robot stays at its current pose.",
+              cfg_.return_home_on_start ? "true" : "false",
+              cfg_.skip_move_home       ? "true" : "false");
+        event_logger_.event("Return-home on start skipped");
     } else if (!robot_.moveHome(safe)) {
         LOG_W("moveHome failed: %s", robot_.lastError().c_str());
     }
+
     if (!gripper_.connect()) {
         LOG_W("Gripper connect failed: %s", gripper_.lastError().c_str());
     }
@@ -154,6 +208,23 @@ int Application::run() {
     LOG_I("Application: exiting main loop.");
     event_logger_.event("Program shutdown",
                         cfg_.runtime_tuning_print_changes_to_console);
+
+    // Optional return-home on shutdown. Disabled by default so a CTRL+C
+    // never triggers an unexpected planned motion. Enabled deployments
+    // explicitly set [robot] return_home_on_shutdown = true.
+    if (cfg_.return_home_on_shutdown) {
+        RobotPose safe{cfg_.safe_x, cfg_.safe_y, cfg_.safe_z,
+                       cfg_.safe_rx, cfg_.safe_ry, cfg_.safe_rz};
+        LOG_I("return_home_on_shutdown=true: planning return to safe pose.");
+        event_logger_.event("Returning to home on shutdown");
+        if (!robot_.moveHome(safe)) {
+            LOG_W("Return-home on shutdown failed: %s",
+                  robot_.lastError().c_str());
+        }
+    } else {
+        LOG_I("return_home_on_shutdown=false: leaving robot at current pose.");
+    }
+
     // Normal shutdown path: just disconnect. The adapter's disconnect()
     // chains to disengage() -> stopMotion() (soft speedl-zero) and then
     // close_connection() which frees DRFL access authority cleanly. We
