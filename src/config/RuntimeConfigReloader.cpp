@@ -63,6 +63,19 @@ bool validate(const char* key, double v) {
     if (std::strcmp(key, "robot.micro_max_jerk_rot")==0)          return v > 0.0 && v <= 30000.0;
     if (std::strcmp(key, "robot.micro_velocity_deadband_mm_s")==0)return v >= 0.0 && v <= 100.0;
     if (std::strcmp(key, "robot.micro_stop_ramp_time_s")==0)      return v >= 0.0 && v <= 5.0;
+    if (std::strcmp(key, "servol.command_rate_hz")==0)            return v > 0.0 && v <= 200.0;
+    if (std::strcmp(key, "servol.min_period_s")==0)               return v >= 0.001 && v <= 1.0;
+    if (std::strcmp(key, "servol.lin_vel")==0)                    return v > 0.0 && v <= 500.0;
+    if (std::strcmp(key, "servol.ang_vel")==0)                    return v > 0.0 && v <= 180.0;
+    if (std::strcmp(key, "servol.lin_acc")==0)                    return v > 0.0 && v <= 5000.0;
+    if (std::strcmp(key, "servol.ang_acc")==0)                    return v > 0.0 && v <= 1500.0;
+    if (std::strcmp(key, "servol.time_s")==0)                     return v >= 0.0 && v <= 1.0;
+    if (std::strcmp(key, "servol.max_step_xyz_mm")==0)            return v >= 0.0 && v <= 200.0;
+    if (std::strcmp(key, "servol.max_step_rot_deg")==0)           return v >= 0.0 && v <= 90.0;
+    if (std::strcmp(key, "servol.arrival_band_xyz_mm")==0)        return v >= 0.0 && v <= 50.0;
+    if (std::strcmp(key, "servol.arrival_band_rot_deg")==0)       return v >= 0.0 && v <= 30.0;
+    if (std::strcmp(key, "servol.tracking_frame_timeout_s")==0)   return v >= 0.0 && v <= 2.0;
+    if (std::strcmp(key, "servol.tracking_recovery_time_s")==0)   return v >= 0.0 && v <= 2.0;
     return true; // bool-only keys handled separately, defaults pass
 }
 
@@ -192,6 +205,37 @@ bool RuntimeConfigReloader::applyDiff(const Config& fresh) {
     TRY_BOOL  (prevent_command_backlog,    "robot.prevent_command_backlog");
     TRY_DOUBLE(min_motion_completion_ratio,"robot.min_motion_completion_ratio");
     TRY_DOUBLE(max_pending_command_age_s,  "robot.max_pending_command_age_s");
+
+    // Motion backend selection - the actual swap is deferred by
+    // Application until the SM returns to a passive state. We still
+    // commit the string into cfg_ here so the Application can read it
+    // back and queue the change.
+    TRY_STRING(motion_backend_type, "motion_backend.type");
+    TRY_BOOL  (motion_backend_allow_amovel, "motion_backend.allow_amovel");
+    TRY_BOOL  (motion_backend_allow_servol, "motion_backend.allow_servol");
+
+    // SERVO-L tunables.
+    TRY_DOUBLE(servol_command_rate_hz,      "servol.command_rate_hz");
+    TRY_DOUBLE(servol_min_period_s,         "servol.min_period_s");
+    TRY_DOUBLE(servol_lin_vel,              "servol.lin_vel");
+    TRY_DOUBLE(servol_ang_vel,              "servol.ang_vel");
+    TRY_DOUBLE(servol_lin_acc,              "servol.lin_acc");
+    TRY_DOUBLE(servol_ang_acc,              "servol.ang_acc");
+    TRY_DOUBLE(servol_time_s,               "servol.time_s");
+    TRY_DOUBLE(servol_max_step_xyz_mm,      "servol.max_step_xyz_mm");
+    TRY_DOUBLE(servol_max_step_rot_deg,     "servol.max_step_rot_deg");
+    TRY_DOUBLE(servol_arrival_band_xyz_mm,  "servol.arrival_band_xyz_mm");
+    TRY_DOUBLE(servol_arrival_band_rot_deg, "servol.arrival_band_rot_deg");
+    TRY_BOOL  (servol_stop_on_tracking_loss,
+               "servol.stop_on_tracking_loss");
+    TRY_BOOL  (servol_hold_last_target_on_tracking_loss,
+               "servol.hold_last_target_on_tracking_loss");
+    TRY_DOUBLE(servol_tracking_frame_timeout_s,
+               "servol.tracking_frame_timeout_s");
+    TRY_DOUBLE(servol_tracking_recovery_time_s,
+               "servol.tracking_recovery_time_s");
+    TRY_BOOL  (servol_log_diagnostics,
+               "servol.log_servol_diagnostics");
 
     // Velocity-filter master switch and gains. Safe to flip at runtime:
     // turning it off mid-run reverts the next tick to the pure pursuit

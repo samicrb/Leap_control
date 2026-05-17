@@ -324,6 +324,48 @@ bool loadConfig(const std::string& path, Config& c) {
     c.max_pending_command_age_s   = dGet("robot.max_pending_command_age_s",
                                          c.max_pending_command_age_s);
 
+    // [motion_backend] - canonical flat keys.
+    c.motion_backend_type           = sGet("motion_backend.type",
+                                           c.motion_backend_type);
+    c.motion_backend_allow_amovel   = bGet("motion_backend.allow_amovel",
+                                           c.motion_backend_allow_amovel);
+    c.motion_backend_allow_servol   = bGet("motion_backend.allow_servol",
+                                           c.motion_backend_allow_servol);
+
+    // [servol] - canonical flat keys.
+    c.servol_enabled              = bGet("servol.enabled",
+                                         c.servol_enabled);
+    c.servol_command_rate_hz      = dGet("servol.command_rate_hz",
+                                         c.servol_command_rate_hz);
+    c.servol_min_period_s         = dGet("servol.min_period_s",
+                                         c.servol_min_period_s);
+    c.servol_lin_vel              = dGet("servol.lin_vel",      c.servol_lin_vel);
+    c.servol_ang_vel              = dGet("servol.ang_vel",      c.servol_ang_vel);
+    c.servol_lin_acc              = dGet("servol.lin_acc",      c.servol_lin_acc);
+    c.servol_ang_acc              = dGet("servol.ang_acc",      c.servol_ang_acc);
+    c.servol_time_s               = dGet("servol.time_s",       c.servol_time_s);
+    c.servol_max_step_xyz_mm      = dGet("servol.max_step_xyz_mm",
+                                         c.servol_max_step_xyz_mm);
+    c.servol_max_step_rot_deg     = dGet("servol.max_step_rot_deg",
+                                         c.servol_max_step_rot_deg);
+    c.servol_arrival_band_xyz_mm  = dGet("servol.arrival_band_xyz_mm",
+                                         c.servol_arrival_band_xyz_mm);
+    c.servol_arrival_band_rot_deg = dGet("servol.arrival_band_rot_deg",
+                                         c.servol_arrival_band_rot_deg);
+    c.servol_stop_on_tracking_loss = bGet("servol.stop_on_tracking_loss",
+                                          c.servol_stop_on_tracking_loss);
+    c.servol_hold_last_target_on_tracking_loss =
+        bGet("servol.hold_last_target_on_tracking_loss",
+             c.servol_hold_last_target_on_tracking_loss);
+    c.servol_tracking_frame_timeout_s =
+        dGet("servol.tracking_frame_timeout_s",
+             c.servol_tracking_frame_timeout_s);
+    c.servol_tracking_recovery_time_s =
+        dGet("servol.tracking_recovery_time_s",
+             c.servol_tracking_recovery_time_s);
+    c.servol_log_diagnostics      = bGet("servol.log_servol_diagnostics",
+                                         c.servol_log_diagnostics);
+
     // [tracking_loss_tolerance] - canonical keys use the section.key form
     // directly because the parser already prefixes bare keys under a
     // section with "section." (Config.cpp parser).

@@ -93,7 +93,9 @@ const char* kHeader =
     "tracking_loss_tolerance_enabled,tracking_recent,"
     "brief_tracking_loss_active,hard_tracking_loss,"
     "tracking_loss_duration_ms,tracking_recovery_stable_ms,"
-    "tracking_hold_active,reanchor_performed,recovery_step_limited\n";
+    "tracking_hold_active,reanchor_performed,recovery_step_limited,"
+    "motion_backend,amovel_enabled,servol_enabled,command_type,"
+    "servol_time_s,servol_lin_vel,servol_ang_vel,servol_lin_acc,servol_ang_acc\n";
 
 void writeVec3(std::FILE* f, const std::optional<std::array<double, 3>>& v) {
     if (v) {
@@ -252,7 +254,7 @@ void MotionLogger::append(const MotionLogSample& s) {
                  s.tracking_stable_age_ms);
 
     std::fprintf(file_,
-                 ",%d,%d,%d,%d,%.3f,%.3f,%d,%d,%d\n",
+                 ",%d,%d,%d,%d,%.3f,%.3f,%d,%d,%d",
                  s.tracking_loss_tolerance_enabled ? 1 : 0,
                  s.tracking_recent ? 1 : 0,
                  s.brief_tracking_loss_active ? 1 : 0,
@@ -262,6 +264,16 @@ void MotionLogger::append(const MotionLogSample& s) {
                  s.tracking_hold_active ? 1 : 0,
                  s.reanchor_performed ? 1 : 0,
                  s.recovery_step_limited ? 1 : 0);
+
+    std::fprintf(file_,
+                 ",%s,%d,%d,%s,%.4f,%.3f,%.3f,%.3f,%.3f\n",
+                 s.motion_backend ? s.motion_backend : "?",
+                 s.amovel_enabled ? 1 : 0,
+                 s.servol_enabled ? 1 : 0,
+                 s.command_type ? s.command_type : "",
+                 s.servol_time_s,
+                 s.servol_lin_vel, s.servol_ang_vel,
+                 s.servol_lin_acc, s.servol_ang_acc);
 
     if (++pending_ >= flush_every_n_) flush();
 }

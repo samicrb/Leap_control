@@ -1,5 +1,7 @@
 #include "app/Application.hpp"
 #include "input/KeyboardButton.hpp"
+#include "motion/AmovelMotionBackend.hpp"
+#include "motion/ServolMotionBackend.hpp"
 #include "util/Logger.hpp"
 #include "util/MathUtils.hpp"
 
@@ -75,10 +77,47 @@ Application::Application(Config& cfg,
       sm_(cfg),
       guard_(cfg, {cfg.safe_x, cfg.safe_y, cfg.safe_z, cfg.safe_rx, cfg.safe_ry, cfg.safe_rz}),
       ui_(cfg),
-      config_path_(std::move(config_path)) {}
+      config_path_(std::move(config_path)) {
+    amovel_backend_ = std::make_unique<AmovelMotionBackend>();
+    servol_backend_ = std::make_unique<ServolMotionBackend>();
+    amovel_backend_->attach(cfg_, robot_);
+    servol_backend_->attach(cfg_, robot_);
+}
 
 bool Application::initialise() {
     LOG_I("Application: initialising.");
+
+    // Resolve the motion backend selection. Unknown values do NOT cause
+    // a silent random choice - we log, prefer amovel as the safe default,
+    // and refuse to start servol if it has been disabled in config.
+    {
+        bool ok = false;
+        MotionBackendKind k = parseMotionBackendKind(cfg_.motion_backend_type, &ok);
+        if (!ok) {
+            LOG_E("motion_backend.type='%s' is not recognised. Valid values "
+                  "are 'amovel' and 'servol'. Falling back to 'amovel'.",
+                  cfg_.motion_backend_type.c_str());
+            k = MotionBackendKind::Amovel;
+        }
+        if (k == MotionBackendKind::Servol && !cfg_.motion_backend_allow_servol) {
+            LOG_E("motion_backend.type='servol' but allow_servol=false. "
+                  "Falling back to 'amovel'.");
+            k = MotionBackendKind::Amovel;
+        }
+        if (k == MotionBackendKind::Amovel && !cfg_.motion_backend_allow_amovel) {
+            LOG_E("motion_backend.type='amovel' but allow_amovel=false. "
+                  "Refusing to start.");
+            return false;
+        }
+        backend_kind_         = k;
+        pending_backend_kind_ = k;
+        pending_backend_change_ = false;
+        LOG_I("Motion backend selected: %s "
+              "(allow_amovel=%s, allow_servol=%s)",
+              motionBackendName(k),
+              cfg_.motion_backend_allow_amovel ? "true" : "false",
+              cfg_.motion_backend_allow_servol ? "true" : "false");
+    }
 
     rebindLoggingIfNeeded();
     if (cfg_.runtime_tuning_enabled) {
@@ -312,6 +351,25 @@ void Application::tick(double now_s) {
     if (cfg_.runtime_tuning_enabled) {
         if (reloader_.poll(now_s)) {
             rebindLoggingIfNeeded();
+            // Detect a hot-reload of motion_backend.type. We never apply
+            // the swap immediately - that would race the active stream
+            // (servol command after an in-flight amovel reliably trips
+            // alarm 5.7056). Queue and apply on the next passive state.
+            bool ok = false;
+            const MotionBackendKind ini_k =
+                parseMotionBackendKind(cfg_.motion_backend_type, &ok);
+            if (ok && ini_k != backend_kind_) {
+                pending_backend_kind_   = ini_k;
+                pending_backend_change_ = true;
+                LOG_I("Motion backend change requested: %s -> %s "
+                      "(deferred until READY/IDLE).",
+                      motionBackendName(backend_kind_),
+                      motionBackendName(ini_k));
+                event_logger_.event(
+                    std::string("Motion backend change deferred: ") +
+                    motionBackendName(backend_kind_) + " -> " +
+                    motionBackendName(ini_k));
+            }
         }
     }
 
@@ -571,6 +629,87 @@ void Application::tick(double now_s) {
         // Cold-start: we have valid recent tracking but it has not been
         // continuously valid long enough to safely re-arm pursuit.
         sample_skip_reason = "tracking_recovery_wait";
+        fault_emergency_issued_ = false;
+    } else if (active_branch_eligible && (cur_active || ramp_to_zero_) &&
+               backend_kind_ == MotionBackendKind::Servol) {
+        // --- SERVO-L backend ---------------------------------------------
+        // Distinct from the amovel branch below. The backend owns its
+        // internal target pose and the scheduler; Application supplies
+        // the tracking context and the SM-issued velocity.
+        if (!prev_active && cur_active) {
+            RobotPose seed;
+            if (robot_.getCurrentPose(seed)) {
+                active_entry_robot_pose_       = seed;
+                active_entry_robot_pose_valid_ = true;
+                last_commanded_target_pose_    = seed;
+                last_commanded_target_valid_   = true;
+                servol_backend_->onActiveEntry(seed, now_s);
+                event_logger_.event("SERVOL backend initialized",
+                                    cfg_.runtime_tuning_print_changes_to_console);
+            } else {
+                active_entry_robot_pose_valid_ = false;
+                last_commanded_target_valid_   = false;
+                LOG_W("SERVOL entry: getCurrentPose failed - skipping.");
+            }
+        }
+
+        if (reanchor_performed && active_entry_robot_pose_valid_) {
+            servol_backend_->onReanchor(last_commanded_target_pose_, now_s);
+        }
+
+        MotionTickContext mctx;
+        mctx.now_s              = now_s;
+        mctx.tick_elapsed_s     = dt_ms / 1000.0;
+        mctx.deadman_active     = btn;
+        mctx.cur_active         = cur_active;
+        mctx.prev_active        = prev_active;
+        mctx.tracking_recent    = tracking_recent;
+        mctx.tracking_stable    = tracking_stable;
+        mctx.brief_loss_active  = brief_loss_active;
+        mctx.tracking_hold_active = tracking_hold_active_;
+        mctx.ramp_to_zero_active = ramp_to_zero_;
+        mctx.sm_linear_velocity  = { cmd.linear_velocity[0],  cmd.linear_velocity[1],  cmd.linear_velocity[2]  };
+        mctx.sm_angular_velocity = { cmd.angular_velocity[0], cmd.angular_velocity[1], cmd.angular_velocity[2] };
+        mctx.active_entry_pose  = active_entry_robot_pose_;
+        mctx.active_entry_valid = active_entry_robot_pose_valid_;
+        mctx.recovery_soft_commands_remaining = recovery_soft_commands_remaining_;
+
+        MotionTickResult mres = servol_backend_->onTick(mctx);
+
+        if (mres.command_sent) {
+            const bool was_in_soft = mctx.recovery_soft_commands_remaining > 0;
+            sample_command_sent     = true;
+            sample_commanded_target = mres.commanded_target;
+            if (mres.commanded_target) {
+                last_commanded_target_pose_ = RobotPose::fromArray(*mres.commanded_target);
+                last_commanded_target_valid_ = true;
+            }
+            sample_step_xyz = mres.commanded_step_xyz_mm;
+            sample_step_rot = mres.commanded_step_rot_deg;
+            sample_command_interval_ms = mres.command_interval_ms;
+            last_emitted_step_xyz_mm_  = mres.commanded_step_xyz_mm;
+            last_emitted_step_rot_deg_ = mres.commanded_step_rot_deg;
+            if (recovery_soft_commands_remaining_ > 0)
+                --recovery_soft_commands_remaining_;
+            sample_recovery_step_limited_local = was_in_soft;
+        } else {
+            sample_skip_reason = mres.skip_reason;
+            if (sample_skip_reason[0] != '\0' &&
+                std::string(sample_skip_reason) == "tracking_invalid") {
+                event_logger_.event("SERVOL command skipped: tracking invalid");
+            }
+        }
+        sample_desired_target = mres.desired_target ? mres.desired_target
+                                                    : sample_desired_target;
+        if (mres.last_commanded) sample_last_commanded = mres.last_commanded;
+        sample_raw_step_xyz_mm  = mres.raw_step_xyz_mm;
+        sample_raw_step_rot_deg = mres.raw_step_rot_deg;
+        sample_step_norm_clipped = mres.step_norm_clipped;
+
+        // Servol does NOT chain ramp-to-zero; entering a passive state
+        // simply stops emission. The internal target is cleared by
+        // onActiveExit on the falling edge handled in the prev_active
+        // branch below.
         fault_emergency_issued_ = false;
     } else if (active_branch_eligible && (cur_active || ramp_to_zero_)) {
         // Active control via the MICRO-MOTION SUPERVISOR (with optional
@@ -1131,15 +1270,22 @@ void Application::tick(double now_s) {
         }
         fault_emergency_issued_ = false;
     } else if (prev_active) {
-        // Falling edge active -> passive. Start the velocity ramp-to-
-        // zero: keep the controller running for a short tail so the
-        // filtered velocity decays under the configured accel / jerk
-        // caps, instead of disappearing in one step. Each tail tick
-        // still issues amovel commands - NO stopMotion(), NO speedl(0),
-        // NO emergencyStop, NO mwait. The ramp branch is entered on
-        // the NEXT tick via (ramp_to_zero_ && !cur_active).
-        if (cfg_.micro_velocity_filter_enabled &&
-            active_entry_robot_pose_valid_) {
+        // Falling edge active -> passive. Backend-specific:
+        //   AMOVEL: optionally start the velocity ramp-to-zero tail
+        //           (only if the velocity filter is enabled).
+        //   SERVOL: stop emitting immediately. servol has no ramp tail
+        //           by design - the controller is already integrating
+        //           the last delivered target, so the cleanest behaviour
+        //           is to stop sending and let the servo decel naturally.
+        if (backend_kind_ == MotionBackendKind::Servol) {
+            servol_backend_->onActiveExit(now_s);
+            LOG_I("State %s -> %s : ceasing SERVOL stream.",
+                  stateName(prev_state_), stateName(cur_state));
+            active_entry_robot_pose_valid_ = false;
+            last_commanded_target_valid_   = false;
+            ramp_to_zero_                  = false;
+        } else if (cfg_.micro_velocity_filter_enabled &&
+                   active_entry_robot_pose_valid_) {
             ramp_to_zero_ = true;
             ramp_start_s_ = now_s;
             LOG_I("State %s -> %s : starting velocity ramp-to-zero "
@@ -1166,6 +1312,24 @@ void Application::tick(double now_s) {
                             " -> " + stateName(cur_state),
                             cfg_.runtime_tuning_print_changes_to_console);
     }
+
+    // Apply a deferred motion-backend change once we're back in a
+    // passive state. Switching mid-motion would collide a servol stream
+    // with in-flight amovel segments and reliably trip alarm 5.7056.
+    if (pending_backend_change_ && !cur_active && !ramp_to_zero_) {
+        const MotionBackendKind from = backend_kind_;
+        backend_kind_           = pending_backend_kind_;
+        pending_backend_change_ = false;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "Motion backend applied: %s -> %s",
+                      motionBackendName(from),
+                      motionBackendName(backend_kind_));
+        event_logger_.event(buf,
+                            cfg_.runtime_tuning_print_changes_to_console);
+        LOG_I("%s", buf);
+    }
+
     prev_state_ = cur_state;
 
     if (cmd.openGripper) {
@@ -1312,6 +1476,20 @@ void Application::tick(double now_s) {
             s.reanchor_performed          = reanchor_performed;
             s.recovery_step_limited       = sample_recovery_step_limited_local
                                             && sample_command_sent;
+
+            s.motion_backend  = motionBackendName(backend_kind_);
+            s.amovel_enabled  = cfg_.motion_backend_allow_amovel;
+            s.servol_enabled  = cfg_.motion_backend_allow_servol &&
+                                cfg_.servol_enabled;
+            s.command_type    = sample_command_sent
+                                ? motionBackendName(backend_kind_) : "";
+            if (backend_kind_ == MotionBackendKind::Servol) {
+                s.servol_time_s  = cfg_.servol_time_s;
+                s.servol_lin_vel = cfg_.servol_lin_vel;
+                s.servol_ang_vel = cfg_.servol_ang_vel;
+                s.servol_lin_acc = cfg_.servol_lin_acc;
+                s.servol_ang_acc = cfg_.servol_ang_acc;
+            }
 
             motion_logger_.append(s);
         }

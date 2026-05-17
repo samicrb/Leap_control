@@ -601,6 +601,55 @@ bool DrflRobotController::sendCartesianMicroMove(const RobotPose& target,
     return true;
 }
 
+// Continuous SERVO-L target update. Distinct from amovel:
+//   - NO planning / NO blending across "segments"
+//   - servol follows the LATEST target delivered, bounded by the
+//     velocity/acceleration limits passed each call
+//   - the time argument is a reach-time HINT; 0 lets the controller pick
+//
+// We do NOT call mwait() here, ever. servol() returning success means the
+// target is acknowledged; the controller continuously interpolates.
+bool DrflRobotController::sendCartesianServoL(const RobotPose& target,
+                                              double lin_vel, double ang_vel,
+                                              double lin_acc, double ang_acc,
+                                              double time_s) {
+    if (!connected_.load() || !engaged_.load()) return false;
+
+    {
+        std::lock_guard<std::mutex> lock(pose_mx_);
+        current_pose_ = target;
+    }
+    if (cfg_.dryrun_robot) return true;
+
+#if !defined(HAVE_DRFL) || !HAVE_DRFL
+    (void)lin_vel; (void)ang_vel; (void)lin_acc; (void)ang_acc; (void)time_s;
+    return true;
+#else
+    // DRFL 1.33.3 signature:
+    //   servol(float fTargetPos[6], float fTargetVel[2], float fTargetAcc[2],
+    //          float fTargetTime = 0.0f);
+    // Doosan documentation:
+    //   fTargetVel[0..1] = [task linear mm/s, task angular deg/s]
+    //   fTargetAcc[0..1] = [task linear mm/s^2, task angular deg/s^2]
+    //   fTargetTime     = total reach time (s). 0 -> controller-defined.
+    if (g_access_grant.load() != 1) {
+        last_error_ = "DRFL servol: no access control authority";
+        return false;
+    }
+    float pose[6] = { (float)target.x,  (float)target.y,  (float)target.z,
+                      (float)target.rx, (float)target.ry, (float)target.rz };
+    float vel[2]  = { (float)lin_vel, (float)ang_vel };
+    float acc[2]  = { (float)lin_acc, (float)ang_acc };
+    const float t = static_cast<float>(time_s > 0.0 ? time_s : 0.0);
+    if (!p_->drfl.servol(pose, vel, acc, t)) {
+        last_error_ = "DRFL servol() failed";
+        return false;
+    }
+    last_was_zero_ = false;
+    return true;
+#endif
+}
+
 bool DrflRobotController::getCurrentPose(RobotPose& out) {
     if (!connected_.load()) return false;
 #if defined(HAVE_DRFL) && HAVE_DRFL

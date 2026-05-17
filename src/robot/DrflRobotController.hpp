@@ -44,6 +44,10 @@ public:
                                 double lin_vel, double ang_vel,
                                 double lin_acc, double ang_acc,
                                 double blending_radius_mm = 0.0) override;
+    bool sendCartesianServoL(const RobotPose& target,
+                             double lin_vel, double ang_vel,
+                             double lin_acc, double ang_acc,
+                             double time_s = 0.0) override;
     bool getCurrentPose(RobotPose& out) override;
 
     std::string lastError() const override { return last_error_; }

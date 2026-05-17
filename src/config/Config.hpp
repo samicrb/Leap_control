@@ -247,8 +247,56 @@ struct Config {
     // pursuit doesn't stall forever.
     double max_pending_command_age_s   = 0.35;
 
+    // --- Motion backend selection ----------------------------------------
+    // Two backends are available:
+    //   "amovel" - existing discrete-segment pursuit with blending
+    //   "servol" - continuous servo task-space target update (Doosan
+    //              SERVO-L). servol follows the most recent target
+    //              delivered, bounded by lin/ang velocity & accel limits.
+    // The active path stays amovel-only inside its branch; the same is
+    // true of servol inside its branch. They do NOT mix per tick.
+    //
+    // Switching the backend mid-run is unsafe (a servol target stream
+    // colliding with an in-flight amovel would surely trip alarm 5.7056).
+    // The Application defers a hot-reload of motion_backend_type until
+    // the SM returns to a passive state.
+    std::string motion_backend_type   = "amovel";
+    bool        motion_backend_allow_amovel = true;
+    bool        motion_backend_allow_servol = true;
+
+    // --- SERVO-L backend (Doosan servol) ---------------------------------
+    // servol(pose, vel=[lin,ang], acc=[lin,ang], time) is an asynchronous
+    // task-space servo. The wrapper sends the LATEST bounded target at
+    // command_rate_hz; the controller interpolates to it. No blending,
+    // no backlog queue, no segment chaining.
+    bool   servol_enabled              = true;
+    double servol_command_rate_hz      = 20.0;
+    double servol_min_period_s         = 0.050;
+    // Doosan servol task velocity / acceleration caps.
+    double servol_lin_vel              = 80.0;   // mm/s
+    double servol_ang_vel              = 20.0;   // deg/s
+    double servol_lin_acc              = 300.0;  // mm/s^2
+    double servol_ang_acc              = 80.0;   // deg/s^2
+    // Optional reach-time. <= 0 -> call servol without forcing time
+    // (most DRFL overloads accept time=0 to mean "controller default").
+    double servol_time_s               = 0.08;
+    // Vector-norm caps per command (mm, deg). Limits how far the target
+    // can move between two consecutive servol calls.
+    double servol_max_step_xyz_mm      = 6.0;
+    double servol_max_step_rot_deg     = 1.5;
+    // Arrival band: below these errors the backend reports "arrival_band"
+    // skip and does NOT emit a redundant command (servol holds anyway).
+    double servol_arrival_band_xyz_mm  = 1.0;
+    double servol_arrival_band_rot_deg = 0.3;
+    // Tracking gate (servol-specific, falls through to tolerance defaults
+    // if these are zero).
+    bool   servol_stop_on_tracking_loss             = true;
+    bool   servol_hold_last_target_on_tracking_loss = true;
+    double servol_tracking_frame_timeout_s          = 0.15;
+    double servol_tracking_recovery_time_s          = 0.05;
+    bool   servol_log_diagnostics                   = true;
+
     // --- Tool (TCP + Tool Weight) --------------------------------------
-    // The TCP and Tool Weight MUST already exist on the Doosan controller
     // (pendant -> Setting -> Robot -> Tool / TCP). The Application only
     // APPLIES the configured names via DRFL set_tcp() / set_tool(). It
     // NEVER creates entries, never calls add_tcp / add_tool, and never

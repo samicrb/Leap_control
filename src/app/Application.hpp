@@ -7,6 +7,7 @@
 #include "input/IExternalButton.hpp"
 #include "logging/EventLogger.hpp"
 #include "logging/MotionLogger.hpp"
+#include "motion/IMotionBackend.hpp"
 #include "robot/IRobotController.hpp"
 #include "robot/WorkspaceGuard.hpp"
 #include "sensor/ILeapSource.hpp"
@@ -150,6 +151,22 @@ private:
     // wait min_motion_completion_ratio * t_est before queueing the next.
     double                last_emitted_step_xyz_mm_ = 0.0;
     double                last_emitted_step_rot_deg_= 0.0;
+
+    // --- Motion backend (amovel vs servol) ---
+    // backend_kind_ is the effective backend in use. When the user
+    // hot-reloads motion_backend.type to a different kind, the change
+    // is queued in pending_backend_kind_ and applied only when the SM
+    // returns to a passive state (otherwise switching mid-stream would
+    // collide a servol stream with in-flight amovel segments).
+    MotionBackendKind          backend_kind_         = MotionBackendKind::Amovel;
+    MotionBackendKind          pending_backend_kind_ = MotionBackendKind::Amovel;
+    bool                       pending_backend_change_ = false;
+    std::unique_ptr<IMotionBackend> servol_backend_;
+    std::unique_ptr<IMotionBackend> amovel_backend_;
+    // The amovel path remains inline in tick() because lifting all its
+    // state members (filtered_velocity_, ramp_to_zero_, last_emitted_*)
+    // into a backend class is a much larger refactor. The servol path
+    // is fully self-contained.
 
     // --- Brief tracking-loss tolerance ---
     // last_valid_tracking_s_ is refreshed every tick on which Leap

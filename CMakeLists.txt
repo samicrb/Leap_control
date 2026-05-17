@@ -62,6 +62,8 @@ set(APP_SOURCES
     src/input/KeyboardButton.cpp
     src/logging/EventLogger.cpp
     src/logging/MotionLogger.cpp
+    src/motion/IMotionBackend.cpp
+    src/motion/ServolMotionBackend.cpp
     src/ui/ConsoleUI.cpp
     src/util/Logger.cpp
 )
@@ -160,10 +162,22 @@ add_executable(gripper_factory_test
 )
 target_include_directories(gripper_factory_test PRIVATE src)
 
+# Servol backend regression test. The backend talks to a recording
+# IRobotController so no DRFL link is required.
+add_executable(servol_backend_test
+    test/servol_backend_test.cpp
+    src/motion/IMotionBackend.cpp
+    src/motion/ServolMotionBackend.cpp
+    src/config/Config.cpp
+    src/util/Logger.cpp
+)
+target_include_directories(servol_backend_test PRIVATE src)
+
 enable_testing()
 add_test(NAME state_machine_smoke      COMMAND state_machine_smoke_test)
 add_test(NAME vector_norm_limiter      COMMAND vector_norm_limiter_test)
 add_test(NAME gripper_factory          COMMAND gripper_factory_test)
+add_test(NAME servol_backend           COMMAND servol_backend_test)
 
 # Copy config next to binary so the demo can be launched directly.
 add_custom_command(TARGET doosan_gesture_demo POST_BUILD

@@ -82,6 +82,29 @@ public:
                                         double lin_acc, double ang_acc,
                                         double blending_radius_mm = 0.0) = 0;
 
+    // Continuous task-space servo target update (Doosan SERVO-L /
+    // servol). Distinct from amovel: NOT a discrete planned move, NOT
+    // chained / blended. The controller continuously follows the most
+    // recent target delivered, bounded by velocity / acceleration caps.
+    //
+    // pose       : target in BASE frame (mm, deg, Doosan ZYZ' Euler)
+    // lin_vel    : task linear velocity cap (mm/s)
+    // ang_vel    : task angular velocity cap (deg/s)
+    // lin_acc    : task linear acceleration cap (mm/s^2)
+    // ang_acc    : task angular acceleration cap (deg/s^2)
+    // time_s     : reach time hint, <= 0 = controller default
+    //
+    // The default implementation returns false (servol not available).
+    // Adapters that wrap DRFL override this with the real call.
+    virtual bool sendCartesianServoL(const RobotPose& target,
+                                     double lin_vel, double ang_vel,
+                                     double lin_acc, double ang_acc,
+                                     double time_s = 0.0) {
+        (void)target; (void)lin_vel; (void)ang_vel;
+        (void)lin_acc; (void)ang_acc; (void)time_s;
+        return false;
+    }
+
     // HARD halt. Issue a controller-level STOP_TYPE_QUICK. Reserved for
     // real faults and shutdown: this can drop the servo into SAFE_OFF
     // on some controllers, so do NOT call it from a streaming loop.

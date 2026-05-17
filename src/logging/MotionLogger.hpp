@@ -122,6 +122,20 @@ struct MotionLogSample {
     bool   tracking_hold_active           = false;
     bool   reanchor_performed             = false;
     bool   recovery_step_limited          = false;
+
+    // --- Motion backend selection (servol / amovel) ---
+    const char* motion_backend     = "?";
+    bool        amovel_enabled     = false;   // allow_amovel
+    bool        servol_enabled     = false;   // allow_servol && servol_enabled
+    const char* command_type       = "?";     // "amovel" | "servol" | ""
+    // Servol-specific tuning snapshot for the row (so post-mortem
+    // analysis can compare same-run servol windows with different
+    // hot-tuned params).
+    double servol_time_s    = 0.0;
+    double servol_lin_vel   = 0.0;
+    double servol_ang_vel   = 0.0;
+    double servol_lin_acc   = 0.0;
+    double servol_ang_acc   = 0.0;
 };
 
 class MotionLogger {
