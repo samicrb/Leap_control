@@ -35,32 +35,38 @@ void ToolIoGripperController::disconnect() {
 
 // Minimum HIGH duration of the pulse. The SoftHand and most pneumatic
 // end-effectors wired on the Doosan tool flange latch on the rising
-// edge; 200 ms is a safe lower bound that still feels instant from the
-// operator's perspective.
-static constexpr int kPulseHighMs = 200;
+// edge. The duration is configurable via gripper.pulse_high_ms, clamped
+// here to a 50 ms floor so a misconfiguration cannot drop below the
+// latching threshold of the SoftHand input stage.
+static constexpr int kMinPulseHighMs = 50;
 
 bool ToolIoGripperController::pulseDO(int index) {
+    int hold_ms = cfg_.gripper_pulse_high_ms;
+    if (hold_ms < kMinPulseHighMs) hold_ms = kMinPulseHighMs;
+
     if (cfg_.dryrun_gripper) {
-        LOG_I("Gripper DRY-RUN: pulse DO[O%02d] (skipped - dryrun.gripper=true)",
-              index);
+        LOG_I("Gripper TOOL_IO DRY-RUN: pulse O%02d for %d ms (skipped - "
+              "dryrun.gripper=true)", index, hold_ms);
         return true;
     }
-    // Real pulse: assert the tool DO HIGH, wait kPulseHighMs, drop it LOW.
+    // Real pulse: assert the tool DO HIGH, wait hold_ms, drop it LOW.
     // If either DRFL call fails we propagate the failure up so the
     // gripper state stays Unknown and the operator sees a clear error.
     if (!robot_.setToolDigitalOutput(index, true)) {
         last_error_ = "Tool DO ON failed: " + robot_.lastError();
-        LOG_E("Gripper: %s", last_error_.c_str());
+        LOG_E("Gripper TOOL_IO: pulse O%02d HIGH FAILED (%s)",
+              index, last_error_.c_str());
         return false;
     }
-    LOG_I("Gripper: pulse Tool DO O%02d -> HIGH (%d ms).", index, kPulseHighMs);
-    std::this_thread::sleep_for(std::chrono::milliseconds(kPulseHighMs));
+    LOG_I("Gripper TOOL_IO: pulse O%02d HIGH for %d ms", index, hold_ms);
+    std::this_thread::sleep_for(std::chrono::milliseconds(hold_ms));
     if (!robot_.setToolDigitalOutput(index, false)) {
         last_error_ = "Tool DO OFF failed: " + robot_.lastError();
-        LOG_E("Gripper: %s", last_error_.c_str());
+        LOG_E("Gripper TOOL_IO: pulse O%02d LOW FAILED (%s)",
+              index, last_error_.c_str());
         return false;
     }
-    LOG_I("Gripper: pulse Tool DO O%02d -> LOW (release).", index);
+    LOG_I("Gripper TOOL_IO: pulse O%02d LOW", index);
     return true;
 }
 

@@ -114,6 +114,17 @@ struct Config {
     double gripper_gesture_hold_s = 0.25;
     int    gripper_open_do_index  = 2;
     int    gripper_close_do_index = 1;
+    // Duration the Tool DO is held HIGH during pulseDO() (ms). Clamped
+    // to a 50 ms floor at use site so misconfiguration cannot stop the
+    // SoftHand from latching. Default 1000 ms suits the qb SoftHand
+    // Industry; lower values (200..300) are fine for fast valves.
+    int    gripper_pulse_high_ms       = 1000;
+    // Optional bring-up helper: when true, Application::initialise()
+    // fires a single pulse on gripper_test_pulse_index after the
+    // gripper connects, independent of any Leap gesture. Useful to
+    // verify O01 / O02 with a multimeter or directly on the SoftHand.
+    bool   gripper_test_pulse_on_start = false;
+    int    gripper_test_pulse_index    = 1;
 
     // --- button ---
     std::string button_mode = "keyboard";

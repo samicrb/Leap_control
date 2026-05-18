@@ -192,11 +192,15 @@ GestureReport GestureInterpreter::update(const HandFrame& frame, double now_s) {
                  gripper_last_zone_ == GripperZone::Close)) {
                 r.gripperOpenImpulse = true;
                 gripper_last_command_s_ = now_s;
+                LOG_I("Gripper IMPULSE: OPEN dist=%.1f mm threshold_open=%.1f mm -> O%02d",
+                      dist, cfg_.gripper_open_mm, cfg_.gripper_open_do_index);
             } else if (cooldown_ok && zone == GripperZone::Close &&
                        (gripper_last_zone_ == GripperZone::Neutral ||
                         gripper_last_zone_ == GripperZone::Open)) {
                 r.gripperCloseImpulse = true;
                 gripper_last_command_s_ = now_s;
+                LOG_I("Gripper IMPULSE: CLOSE dist=%.1f mm threshold_close=%.1f mm -> O%02d",
+                      dist, cfg_.gripper_close_mm, cfg_.gripper_close_do_index);
             }
             gripper_last_zone_ = zone;
         } else {

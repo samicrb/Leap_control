@@ -175,6 +175,32 @@ bool Application::initialise() {
     if (!gripper_.connect()) {
         LOG_W("Gripper connect failed: %s", gripper_.lastError().c_str());
     }
+
+    // Optional bring-up test pulse, completely independent of the Leap
+    // gesture path. Lets the operator verify O01 / O02 wiring with a
+    // multimeter or directly on the SoftHand before launching the demo.
+    // A failure here is NOT fatal - we keep going so the rest of the
+    // application can still come up.
+    if (cfg_.gripper_test_pulse_on_start && gripper_.isConnected()) {
+        LOG_I("Gripper: startup TEST PULSE on O%02d (gripper.test_pulse_on_start=true).",
+              cfg_.gripper_test_pulse_index);
+        bool ok = false;
+        if (cfg_.gripper_test_pulse_index == cfg_.gripper_open_do_index) {
+            ok = gripper_.open();
+        } else if (cfg_.gripper_test_pulse_index == cfg_.gripper_close_do_index) {
+            ok = gripper_.close();
+        } else {
+            LOG_W("Gripper: test_pulse_index=%d does not match open_do_index=%d "
+                  "or close_do_index=%d - skipping.",
+                  cfg_.gripper_test_pulse_index,
+                  cfg_.gripper_open_do_index, cfg_.gripper_close_do_index);
+        }
+        if (cfg_.gripper_test_pulse_index == cfg_.gripper_open_do_index ||
+            cfg_.gripper_test_pulse_index == cfg_.gripper_close_do_index) {
+            LOG_I("Gripper: startup TEST PULSE result: %s",
+                  ok ? "OK" : "FAILED");
+        }
+    }
     return true;
 }
 

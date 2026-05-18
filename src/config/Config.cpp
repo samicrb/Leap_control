@@ -250,6 +250,9 @@ bool loadConfig(const std::string& path, Config& c) {
     c.gripper_gesture_hold_s = dGet("gripper.gesture_hold_s", c.gripper_gesture_hold_s);
     c.gripper_open_do_index  = iGet("gripper.open_do_index",  c.gripper_open_do_index);
     c.gripper_close_do_index = iGet("gripper.close_do_index", c.gripper_close_do_index);
+    c.gripper_pulse_high_ms       = iGet("gripper.pulse_high_ms",       c.gripper_pulse_high_ms);
+    c.gripper_test_pulse_on_start = bGet("gripper.test_pulse_on_start", c.gripper_test_pulse_on_start);
+    c.gripper_test_pulse_index    = iGet("gripper.test_pulse_index",    c.gripper_test_pulse_index);
 
     // --- Vendor / optional gripper selection ---
     c.gripper_enabled              = bGet("gripper.enabled",              c.gripper_enabled);
