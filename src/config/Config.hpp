@@ -63,6 +63,50 @@ struct Config {
     int    gripper_open_do_index  = 2;
     int    gripper_close_do_index = 1;
 
+    // --- gripper backend selection (vendor-agnostic) ---
+    // The application picks a gripper implementation via GripperFactory:
+    //   enabled = false                         -> NoopGripper
+    //   type    = softclaw  + backend = qb_sdk  -> QbSoftClawGripper
+    //                                              (qbRobotics SoftClaw
+    //                                              connected to THIS PC
+    //                                              via USB / RS-485,
+    //                                              NOT to the Doosan
+    //                                              controller)
+    //   backend = tool_io                       -> ToolIoGripperController
+    //                                              (legacy DO-driven path)
+    //   backend = none                          -> NoopGripper
+    // See docs/SOFTCLAW_INTEGRATION.md for the SoftClaw integration
+    // notes (SDK URL, COM port discovery, Windows driver hints).
+    bool        gripper_enabled              = false;
+    std::string gripper_type                 = "softclaw";
+    std::string gripper_backend              = "qb_sdk";
+
+    // SoftClaw / qbAPI serial settings. The qbAPI default Windows baud
+    // is 2 000 000 - keep this configurable in case a vendor firmware
+    // ships with a different rate.
+    std::string gripper_port                 = "COM3";
+    int         gripper_device_id            = 1;
+    int         gripper_baudrate             = 2000000;
+
+    // If false, an initialization failure falls back to NoopGripper
+    // (the demo still runs without the gripper). If true, startup aborts.
+    bool        gripper_required             = false;
+    bool        gripper_initialize_on_startup = true;
+    bool        gripper_open_on_startup      = false;
+    bool        gripper_stop_on_exit         = true;
+
+    // SoftClaw command values. The qbAPI commSetInputs() expects two
+    // shorts: inputs[0] = position, inputs[1] = stiffness / deflection.
+    int         gripper_open_position        = 0;
+    int         gripper_close_position       = 19000;
+    int         gripper_open_deflection      = 0;
+    int         gripper_close_deflection     = 15000;
+
+    // Rate-limit / duplicate-suppression on the SoftClaw bus.
+    int         gripper_min_command_period_ms = 30;
+    int         gripper_command_deadband     = 50;
+    int         gripper_command_timeout_ms   = 100;
+
     // --- button ---
     std::string button_mode = "keyboard";
     std::string button_key  = "SPACE";

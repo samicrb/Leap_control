@@ -49,8 +49,22 @@ bool Application::initialise() {
     if (!robot_.moveHome(safe)) {
         LOG_W("moveHome failed: %s", robot_.lastError().c_str());
     }
-    if (!gripper_.connect()) {
-        LOG_W("Gripper connect failed: %s", gripper_.lastError().c_str());
+    // Gripper lifecycle.
+    //   - GripperFactory may have already called initialize() when
+    //     [gripper].initialize_on_startup = true. We re-call it here
+    //     for legacy backends (ToolIoGripperController) which do their
+    //     real work in connect(); the default implementation forwards
+    //     to connect() so this is a no-op for backends already up.
+    //   - Optional one-shot open() at startup so the demo begins with
+    //     a known gripper state.
+    if (!gripper_.isAvailable()) {
+        if (!gripper_.initialize()) {
+            LOG_W("Gripper initialize failed: %s", gripper_.lastError().c_str());
+        }
+    }
+    if (cfg_.gripper_open_on_startup && gripper_.isAvailable()) {
+        LOG_I("Gripper: open_on_startup=true -> commanding OPEN.");
+        gripper_.open();
     }
     return true;
 }
@@ -86,6 +100,14 @@ int Application::run() {
     robot_.stopMotion();
     robot_.disengage();
     robot_.disconnect();
+    // Gripper shutdown: optional motor-stop / deactivate first (the
+    // SoftClaw backend deactivates the qbmove motor so the device
+    // does not hold torque between sessions), then the regular
+    // disconnect.
+    if (cfg_.gripper_stop_on_exit && gripper_.isAvailable()) {
+        LOG_I("Gripper: stop_on_exit=true -> commanding STOP.");
+        gripper_.stop();
+    }
     gripper_.disconnect();
     sensor_.stop();
     button_.stop();

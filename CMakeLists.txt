@@ -25,6 +25,17 @@ endif()
 # ---------------------------------------------------------------------------
 set(LEAPC_SDK_ROOT "" CACHE PATH "Path to Ultraleap Gemini LeapSDK (contains include/LeapC.h)")
 set(DRFL_SDK_ROOT  "" CACHE PATH "Path to Doosan DRFL 1.33.2 SDK (contains include/DRFLEx.h)")
+# qbRobotics qbAPI sources (https://github.com/NMMI/qbAPI). The SoftClaw
+# is controlled FROM THIS PC via the qbRobotics USB / RS-485 adapter -
+# the Doosan controller is NOT involved in gripper commands. If left
+# empty the project still builds, QbSoftClawGripper compiles as a stub
+# and the factory falls back to NoopGripper when required = false.
+# The folder is expected to contain qbmove_communications.h and the
+# matching qbmove_communications.cpp (default layout: <root>/src).
+set(QBROBOTICS_SDK_ROOT
+    "${CMAKE_SOURCE_DIR}/external/qbrobotics_sdk"
+    CACHE PATH
+    "Path to qbRobotics qbAPI source tree (https://github.com/NMMI/qbAPI)")
 
 set(HAVE_LEAPC FALSE)
 if(LEAPC_SDK_ROOT AND EXISTS "${LEAPC_SDK_ROOT}/include/LeapC.h")
@@ -42,6 +53,42 @@ else()
     message(WARNING "DRFL SDK not found - building with STUB robot adapter")
 endif()
 
+# qbRobotics qbAPI lookup. Accept either:
+#   <root>/qbmove_communications.h           (top-level)
+#   <root>/src/qbmove_communications.h       (default NMMI/qbAPI layout)
+#   <root>/include/qbmove_communications.h   (custom)
+set(HAVE_QBROBOTICS_SDK FALSE)
+set(QB_SDK_INCLUDE_DIR "")
+set(QB_SDK_SOURCES)
+if(QBROBOTICS_SDK_ROOT)
+    foreach(_qb_layout "" "src" "include")
+        set(_qb_dir "${QBROBOTICS_SDK_ROOT}/${_qb_layout}")
+        if(EXISTS "${_qb_dir}/qbmove_communications.h")
+            set(QB_SDK_INCLUDE_DIR "${_qb_dir}")
+            if(EXISTS "${_qb_dir}/qbmove_communications.cpp")
+                list(APPEND QB_SDK_SOURCES "${_qb_dir}/qbmove_communications.cpp")
+            elseif(EXISTS "${_qb_dir}/qbmove_communications.c")
+                list(APPEND QB_SDK_SOURCES "${_qb_dir}/qbmove_communications.c")
+            endif()
+            if(EXISTS "${_qb_dir}/commands.h")
+                # commands.h is the protocol-constants header; include only.
+            endif()
+            set(HAVE_QBROBOTICS_SDK TRUE)
+            break()
+        endif()
+    endforeach()
+endif()
+if(HAVE_QBROBOTICS_SDK)
+    message(STATUS "qbRobotics qbAPI found at ${QB_SDK_INCLUDE_DIR} "
+                   "(real SoftClaw control enabled).")
+else()
+    message(WARNING
+        "qbRobotics qbAPI not found - building QbSoftClawGripper as a STUB. "
+        "Clone https://github.com/NMMI/qbAPI into "
+        "${QBROBOTICS_SDK_ROOT} (or set -DQBROBOTICS_SDK_ROOT=<path>) to "
+        "enable real SoftClaw control. See docs/SOFTCLAW_INTEGRATION.md.")
+endif()
+
 # ---------------------------------------------------------------------------
 # Source files
 # ---------------------------------------------------------------------------
@@ -54,14 +101,31 @@ set(APP_SOURCES
     src/state/StateMachine.cpp
     src/robot/DrflRobotController.cpp
     src/robot/WorkspaceGuard.cpp
+    src/gripper/GripperFactory.cpp
+    src/gripper/NoopGripper.cpp
+    src/gripper/QbSoftClawGripper.cpp
     src/gripper/ToolIoGripperController.cpp
     src/input/KeyboardButton.cpp
     src/ui/ConsoleUI.cpp
     src/util/Logger.cpp
 )
+if(HAVE_QBROBOTICS_SDK)
+    list(APPEND APP_SOURCES ${QB_SDK_SOURCES})
+endif()
 
 add_executable(doosan_gesture_demo ${APP_SOURCES})
 target_include_directories(doosan_gesture_demo PRIVATE src)
+
+if(HAVE_QBROBOTICS_SDK)
+    target_compile_definitions(doosan_gesture_demo PRIVATE HAVE_QBROBOTICS_SDK=1)
+    target_include_directories(doosan_gesture_demo PRIVATE "${QB_SDK_INCLUDE_DIR}")
+    if(WIN32)
+        # qbAPI uses Win32 HANDLE / CreateFile under the hood. Kernel32
+        # is implicitly linked by MSVC; the explicit link is here for
+        # clarity should the build move to a different toolchain.
+        target_link_libraries(doosan_gesture_demo PRIVATE kernel32)
+    endif()
+endif()
 
 if(HAVE_LEAPC)
     target_compile_definitions(doosan_gesture_demo PRIVATE HAVE_LEAPC=1)
@@ -133,8 +197,24 @@ add_executable(state_machine_smoke_test
     src/util/Logger.cpp
 )
 target_include_directories(state_machine_smoke_test PRIVATE src)
+
+# GripperFactory selection + NoopGripper fallback test. The qbAPI is
+# deliberately NOT linked here so the QbSoftClawGripper exercises its
+# "SDK missing / hardware absent" branches.
+add_executable(gripper_factory_test
+    test/gripper_factory_test.cpp
+    src/gripper/GripperFactory.cpp
+    src/gripper/NoopGripper.cpp
+    src/gripper/QbSoftClawGripper.cpp
+    src/gripper/ToolIoGripperController.cpp
+    src/config/Config.cpp
+    src/util/Logger.cpp
+)
+target_include_directories(gripper_factory_test PRIVATE src)
+
 enable_testing()
 add_test(NAME state_machine_smoke COMMAND state_machine_smoke_test)
+add_test(NAME gripper_factory     COMMAND gripper_factory_test)
 
 # Copy config next to binary so the demo can be launched directly.
 add_custom_command(TARGET doosan_gesture_demo POST_BUILD
