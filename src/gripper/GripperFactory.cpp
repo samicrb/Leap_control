@@ -1,7 +1,7 @@
 #include "gripper/GripperFactory.hpp"
 
 #include "gripper/NoopGripper.hpp"
-#include "gripper/QbSoftHandIndustryGripper.hpp"
+#include "gripper/QbSoftClawGripper.hpp"
 #include "gripper/ToolIoGripperController.hpp"
 #include "util/Logger.hpp"
 
@@ -41,11 +41,11 @@ std::unique_ptr<IGripperController> makeGripper(const Config& cfg,
               cfg.gripper_open_do_index, cfg.gripper_close_do_index);
         return std::make_unique<ToolIoGripperController>(cfg, robot);
     }
-    if (backend == "qb_softhand_industry" || type == "qb_softhand_industry") {
-        LOG_I("Gripper selection: type='qb_softhand_industry' backend='%s' "
-              "-> QbSoftHandIndustryGripper (STUB - vendor SDK not linked).",
+    if (backend == "qb_softclaw" || type == "qb_softclaw") {
+        LOG_I("Gripper selection: type='qb_softclaw' backend='%s' "
+              "-> QbSoftClawGripper (STUB - vendor SDK not linked).",
               cfg.gripper_backend.c_str());
-        return std::make_unique<QbSoftHandIndustryGripper>(cfg);
+        return std::make_unique<QbSoftClawGripper>(cfg);
     }
 
     LOG_W("Gripper selection: unknown backend '%s' / type '%s' "

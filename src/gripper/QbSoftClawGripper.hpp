@@ -8,7 +8,7 @@
 
 namespace dgd {
 
-// qbRobotics SoftHand Industry - PLACEHOLDER backend.
+// qbRobotics SoftClaw - PLACEHOLDER backend.
 //
 // This implementation does NOT link the qbRobotics SDK. It exists so
 // the project compiles and runs in the field with [gripper] enabled =
@@ -16,17 +16,17 @@ namespace dgd {
 // the intended action; no socket / serial / API call is performed.
 //
 // Replace the bodies of open() / close() / setClosure() with the
-// qbRobotics UDP/API calls when the SDK is available. The interface
-// shape (impulse-style open/close + optional continuous setClosure)
-// matches the eventual integration path so callers do not need to
-// change.
+// qbRobotics SoftClaw UDP/API calls when the SDK is available. The
+// interface shape (impulse-style open/close + optional continuous
+// setClosure) matches the eventual integration path so callers do not
+// need to change.
 //
 // IMPORTANT: gripper commands must remain event-based. NEVER call this
 // in the 60 Hz motion loop; Application invokes open() / close() only
 // on gesture impulses.
-class QbSoftHandIndustryGripper final : public IGripperController {
+class QbSoftClawGripper final : public IGripperController {
 public:
-    explicit QbSoftHandIndustryGripper(const Config& cfg);
+    explicit QbSoftClawGripper(const Config& cfg);
 
     bool connect() override;
     void disconnect() override;

@@ -5,7 +5,7 @@
 //   gripper_enabled = true,      -> respect backend choice
 //     backend = "none"           -> NoopGripper
 //     backend = "tool_io"        -> ToolIoGripperController (legacy)
-//     type    = "qb_softhand_industry" -> QbSoftHandIndustryGripper (stub)
+//     type    = "qb_softclaw" -> QbSoftClawGripper (stub)
 
 #include "config/Config.hpp"
 #include "gripper/GripperFactory.hpp"
@@ -81,12 +81,12 @@ int main() {
                "enabled+backend=none: still NoopGripper (no I/O)");
     }
 
-    // 3. qb_softhand_industry stub: connects but explicitly logs as stub.
+    // 3. qb_softclaw stub: connects but explicitly logs as stub.
     {
         Config cfg;
         cfg.gripper_enabled = true;
-        cfg.gripper_type    = "qb_softhand_industry";
-        cfg.gripper_backend = "qb_softhand_industry";
+        cfg.gripper_type    = "qb_softclaw";
+        cfg.gripper_backend = "qb_softclaw";
         auto g = makeGripper(cfg, robot);
         expect(g->connect(), "qb stub: connect() succeeds (no SDK linked)");
         expect(g->isAvailable(), "qb stub: isAvailable() true after connect");

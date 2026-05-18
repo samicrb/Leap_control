@@ -12,7 +12,7 @@ namespace dgd {
 // The optional methods (initialize / setClosure / stopOrHold /
 // isAvailable) have default no-op implementations so existing two-state
 // backends (e.g. tool-DO) remain ABI-stable. Vendor-specific backends
-// (qbRobotics SoftHand Industry) override them with real behaviour.
+// (qbRobotics SoftClaw) override them with real behaviour.
 class IGripperController {
 public:
     virtual ~IGripperController() = default;

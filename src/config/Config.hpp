@@ -309,14 +309,14 @@ struct Config {
     // gripper_enabled = false: the demo behaves exactly as if no gripper
     // were present. NoopGripper is used; no SDK / library is required.
     // gripper_enabled = true:  the configured backend is constructed.
-    //   type    : informative tag (e.g. "qb_softhand_industry", "tool_io")
+    //   type    : informative tag (e.g. "qb_softclaw", "tool_io")
     //   backend : selects the actual implementation
     //             "none"   - NoopGripper (logging-only, no I/O)
     //             "tool_io"- ToolIoGripperController (existing DRFL tool DO)
     // The remaining qb_* parameters are stubs for a future UDP/API
     // backend; they are loaded today so a fresh INI keeps the slots.
     bool        gripper_enabled         = false;
-    std::string gripper_type            = "qb_softhand_industry";
+    std::string gripper_type            = "qb_softclaw";
     std::string gripper_backend         = "none";
     std::string gripper_ip              = "192.168.1.110";
     double      gripper_open_position   = 0.0;

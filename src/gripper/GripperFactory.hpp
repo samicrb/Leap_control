@@ -14,7 +14,7 @@ namespace dgd {
 //   gripper_enabled = false         -> NoopGripper
 //   backend = "none"                -> NoopGripper
 //   backend = "tool_io"             -> ToolIoGripperController (legacy)
-//   type    = "qb_softhand_industry"-> QbSoftHandIndustryGripper (stub)
+//   type    = "qb_softclaw"         -> QbSoftClawGripper (stub)
 //   anything else                   -> NoopGripper + warning
 //
 // The function never throws and always returns a usable pointer so

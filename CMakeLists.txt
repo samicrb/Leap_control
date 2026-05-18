@@ -57,7 +57,7 @@ set(APP_SOURCES
     src/robot/WorkspaceGuard.cpp
     src/gripper/GripperFactory.cpp
     src/gripper/NoopGripper.cpp
-    src/gripper/QbSoftHandIndustryGripper.cpp
+    src/gripper/QbSoftClawGripper.cpp
     src/gripper/ToolIoGripperController.cpp
     src/input/KeyboardButton.cpp
     src/logging/EventLogger.cpp
@@ -155,7 +155,7 @@ add_executable(gripper_factory_test
     test/gripper_factory_test.cpp
     src/gripper/GripperFactory.cpp
     src/gripper/NoopGripper.cpp
-    src/gripper/QbSoftHandIndustryGripper.cpp
+    src/gripper/QbSoftClawGripper.cpp
     src/gripper/ToolIoGripperController.cpp
     src/config/Config.cpp
     src/util/Logger.cpp
