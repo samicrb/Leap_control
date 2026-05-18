@@ -45,6 +45,16 @@ public:
         (void)name; return true;
     }
 
+    // Drive a Tool Digital Output (1-based index) high or low. Wraps
+    // DRFL set_tool_digital_output(). Used by ToolIoGripperController
+    // to pulse end-effector valves (e.g. SoftHand: O01 = open, O02 =
+    // close on a Doosan controller-side wiring).
+    // Default impl returns false so non-DRFL adapters (test stubs) do
+    // not silently pretend success.
+    virtual bool setToolDigitalOutput(int /*index*/, bool /*value*/) {
+        return false;
+    }
+
     // --- Streaming control ---------------------------------------------
     // Request a Cartesian velocity (mm/s, deg/s) in the base frame.
     // Adapter is responsible for forwarding this to the robot's

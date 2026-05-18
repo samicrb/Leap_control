@@ -432,6 +432,43 @@ bool DrflRobotController::setToolWeight(const std::string& name) {
     return true;
 }
 
+// Drive a single Tool Digital Output. `index` is 1-based to match the
+// pendant labelling (O01, O02, ...). Used by ToolIoGripperController to
+// pulse end-effector valves wired to the Doosan tool flange.
+bool DrflRobotController::setToolDigitalOutput(int index, bool value) {
+    if (!connected_.load()) {
+        last_error_ = "setToolDigitalOutput: not connected";
+        LOG_E("%s (O%02d=%d)", last_error_.c_str(), index, value ? 1 : 0);
+        return false;
+    }
+    if (index < 1) {
+        last_error_ = "setToolDigitalOutput: invalid 1-based index";
+        LOG_E("%s (got %d)", last_error_.c_str(), index);
+        return false;
+    }
+#if defined(HAVE_DRFL) && HAVE_DRFL
+    if (g_access_grant.load() != 1) {
+        last_error_ = "setToolDigitalOutput: no access control authority";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
+    // DRFL enum: GPIO_TOOL_DIGITAL_INDEX_1 .. GPIO_TOOL_DIGITAL_INDEX_N
+    // map sequentially. Convert from the 1-based pendant index.
+    const GPIO_TOOL_DIGITAL_INDEX e_index =
+        static_cast<GPIO_TOOL_DIGITAL_INDEX>(
+            GPIO_TOOL_DIGITAL_INDEX_1 + (index - 1));
+    if (!p_->drfl.set_tool_digital_output(e_index, value ? TRUE : FALSE)) {
+        last_error_ = "DRFL set_tool_digital_output() failed";
+        LOG_E("%s (O%02d=%d)", last_error_.c_str(), index, value ? 1 : 0);
+        return false;
+    }
+#else
+    LOG_I("[SIM] set_tool_digital_output(O%02d, %s)",
+          index, value ? "ON" : "OFF");
+#endif
+    return true;
+}
+
 bool DrflRobotController::sendCartesianVelocity(const std::array<double, 6>& twist) {
     if (!connected_.load() || !engaged_.load()) return false;
 
