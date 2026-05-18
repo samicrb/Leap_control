@@ -31,6 +31,21 @@ operator-friendly.
   with cooperative simulator fallbacks when the SDKs aren't installed on the
   build machine.
 
+### Gripper backends
+
+| `gripper.type` / `gripper.backend`     | Implementation               | Connection                                |
+|----------------------------------------|------------------------------|-------------------------------------------|
+| `enabled = false`                      | `NoopGripper`                | none                                      |
+| `backend = none`                       | `NoopGripper`                | none                                      |
+| `backend = tool_io` (legacy)           | `ToolIoGripperController`    | Doosan tool digital outputs (DRFL)        |
+| `type = softclaw` + `backend = qb_sdk` | `QbSoftClawGripper`          | **PC USB / RS-485** via qbAPI - NOT Doosan |
+
+For the qb SoftClaw, gripper commands originate from the Windows PC
+running this application, NOT from the Doosan controller. The Doosan
+controller stays responsible for robot motion only (DRFL). See
+[docs/SOFTCLAW_INTEGRATION.md](docs/SOFTCLAW_INTEGRATION.md) for SDK
+download, COM port discovery and troubleshooting.
+
 ## 2. Project layout
 
 ```
@@ -50,7 +65,8 @@ Leap_control/
 │   ├── gesture/{GestureInterpreter,GestureTypes}.{hpp,cpp}
 │   ├── state/{StateMachine,States}.{hpp,cpp}
 │   ├── robot/{IRobotController,DrflRobotController,WorkspaceGuard,RobotPose}.{hpp,cpp}
-│   ├── gripper/{IGripperController,ToolIoGripperController}.{hpp,cpp}
+│   ├── gripper/{IGripperController,GripperFactory,NoopGripper,
+│   │            QbSoftClawGripper,ToolIoGripperController}.{hpp,cpp}
 │   ├── input/{IExternalButton,KeyboardButton}.{hpp,cpp}
 │   ├── ui/ConsoleUI.{hpp,cpp}
 │   └── util/{Logger,MathUtils}.{hpp,cpp}
@@ -66,6 +82,11 @@ Prerequisites:
 - Doosan DRFL 1.33.x SDK from
   [github.com/DoosanRobotics/API-DRFL](https://github.com/DoosanRobotics/API-DRFL)
   (provides `include/DRFLEx.h` and `library/Windows/64bits/DRFLWin64.lib`)
+- (optional) qbRobotics qbAPI from
+  [github.com/NMMI/qbAPI](https://github.com/NMMI/qbAPI) - required only
+  if a qb SoftClaw is connected to the PC. The build falls back to a
+  stub gripper when this SDK is absent. See
+  [docs/SOFTCLAW_INTEGRATION.md](docs/SOFTCLAW_INTEGRATION.md).
 
 ```powershell
 git clone <this repo>

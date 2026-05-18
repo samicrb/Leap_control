@@ -2,7 +2,7 @@
 
 #include "app/Application.hpp"
 #include "config/Config.hpp"
-#include "gripper/ToolIoGripperController.hpp"
+#include "gripper/GripperFactory.hpp"
 #include "input/KeyboardButton.hpp"
 #include "robot/DrflRobotController.hpp"
 #include "sensor/LeapSource.hpp"
@@ -37,16 +37,23 @@ int main(int argc, char** argv) {
 
     dgd::Logger::instance().configure(dgd::parseLogLevel(cfg.log_level), cfg.log_file);
     LOG_I("Doosan gesture demo starting.");
+    LOG_I("Gripper:  enabled=%s type='%s' backend='%s'",
+          cfg.gripper_enabled ? "true" : "false",
+          cfg.gripper_type.c_str(), cfg.gripper_backend.c_str());
 
     std::signal(SIGINT,  handleSignal);
     std::signal(SIGTERM, handleSignal);
 
-    dgd::LeapSource            sensor;
-    dgd::DrflRobotController   robot(cfg);
-    dgd::ToolIoGripperController gripper(cfg, robot);
-    dgd::KeyboardButton        button;
+    dgd::LeapSource          sensor;
+    dgd::DrflRobotController robot(cfg);
+    auto                     gripper = dgd::makeGripper(cfg, robot);
+    if (!gripper) {
+        LOG_E("Gripper required by config but initialization failed; aborting.");
+        return 1;
+    }
+    dgd::KeyboardButton      button;
 
-    dgd::Application app(cfg, sensor, robot, gripper, button);
+    dgd::Application app(cfg, sensor, robot, *gripper, button);
     g_app = &app;
 
     if (!app.initialise()) {

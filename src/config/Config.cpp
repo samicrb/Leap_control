@@ -125,6 +125,28 @@ bool loadConfig(const std::string& path, Config& c) {
     c.gripper_open_do_index  = iGet("gripper.open_do_index",  c.gripper_open_do_index);
     c.gripper_close_do_index = iGet("gripper.close_do_index", c.gripper_close_do_index);
 
+    // --- gripper backend (vendor-agnostic / qbRobotics SoftClaw) ---
+    c.gripper_enabled              = bGet("gripper.enabled",          c.gripper_enabled);
+    c.gripper_type                 = sGet("gripper.type",             c.gripper_type);
+    c.gripper_backend              = sGet("gripper.backend",          c.gripper_backend);
+    c.gripper_port                 = sGet("gripper.port",             c.gripper_port);
+    c.gripper_device_id            = iGet("gripper.device_id",        c.gripper_device_id);
+    c.gripper_baudrate             = iGet("gripper.baudrate",         c.gripper_baudrate);
+    c.gripper_required             = bGet("gripper.required",         c.gripper_required);
+    c.gripper_initialize_on_startup= bGet("gripper.initialize_on_startup",
+                                          c.gripper_initialize_on_startup);
+    c.gripper_open_on_startup      = bGet("gripper.open_on_startup",  c.gripper_open_on_startup);
+    c.gripper_stop_on_exit         = bGet("gripper.stop_on_exit",     c.gripper_stop_on_exit);
+    c.gripper_open_position        = iGet("gripper.open_position",    c.gripper_open_position);
+    c.gripper_close_position       = iGet("gripper.close_position",   c.gripper_close_position);
+    c.gripper_open_deflection      = iGet("gripper.open_deflection",  c.gripper_open_deflection);
+    c.gripper_close_deflection     = iGet("gripper.close_deflection", c.gripper_close_deflection);
+    c.gripper_min_command_period_ms= iGet("gripper.min_command_period_ms",
+                                          c.gripper_min_command_period_ms);
+    c.gripper_command_deadband     = iGet("gripper.command_deadband", c.gripper_command_deadband);
+    c.gripper_command_timeout_ms   = iGet("gripper.command_timeout_ms",
+                                          c.gripper_command_timeout_ms);
+
     c.button_mode = sGet("button.mode", c.button_mode);
     c.button_key  = sGet("button.keyboard_key", c.button_key);
 
