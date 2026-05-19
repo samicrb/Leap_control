@@ -114,6 +114,12 @@ struct Config {
     double gripper_gesture_hold_s = 0.25;
     int    gripper_open_do_index  = 2;
     int    gripper_close_do_index = 1;
+    // Which DRFL DO bank pulseDO() drives:
+    //   "tool"       -> set_tool_digital_output() on the flange (GPIO_TOOL_*)
+    //   "controller" -> set_digital_output()      on the controller box (GPIO_CTRLBOX_*)
+    // Default is "controller" because the SoftHand on this cell is wired
+    // to the Doosan controller box DOs, not to the tool flange.
+    std::string gripper_io_scope = "controller";
     // Duration the Tool DO is held HIGH during pulseDO() (ms). Clamped
     // to a 50 ms floor at use site so misconfiguration cannot stop the
     // SoftHand from latching. Default 1000 ms suits the qb SoftHand
@@ -175,6 +181,12 @@ struct Config {
     double micro_max_step_rot_deg     = 4.0;
     double micro_arrival_band_xyz_mm  = 2.0;
     double micro_arrival_band_rot_deg = 0.5;
+    // Slew-rate cap on desired_target_pose_ XYZ between two ticks. Limits
+    // how fast the pursuit TARGET (not the emitted step) can chase a
+    // fast hand. Effective per-tick cap (mm) = ratio * lin_vel * T_emit
+    // where T_emit = max(min_period_s, 1 / command_rate_hz). Lower =
+    // smoother / less catch-up jitter. Higher = more responsive.
+    double micro_target_change_ratio  = 0.70;
 
     // --- Velocity smoothing layer (sits on top of the pursuit controller) ---
     // When enabled, the active control loop no longer commands a position

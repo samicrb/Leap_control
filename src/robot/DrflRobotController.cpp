@@ -469,6 +469,45 @@ bool DrflRobotController::setToolDigitalOutput(int index, bool value) {
     return true;
 }
 
+// Drive a CONTROLLER box Digital Output. Same 1-based pendant index
+// convention as setToolDigitalOutput(), but it routes to the controller
+// cabinet DOs (GPIO_CTRLBOX_*) via set_digital_output() instead of the
+// flange DOs. Used by DigitalIoGripperController when [gripper].io_scope
+// = "controller" - which is the case for the SoftHand on this cell.
+bool DrflRobotController::setControllerDigitalOutput(int index, bool value) {
+    if (!connected_.load()) {
+        last_error_ = "setControllerDigitalOutput: not connected";
+        LOG_E("%s (O%02d=%d)", last_error_.c_str(), index, value ? 1 : 0);
+        return false;
+    }
+    if (index < 1) {
+        last_error_ = "setControllerDigitalOutput: invalid 1-based index";
+        LOG_E("%s (got %d)", last_error_.c_str(), index);
+        return false;
+    }
+#if defined(HAVE_DRFL) && HAVE_DRFL
+    if (g_access_grant.load() != 1) {
+        last_error_ = "setControllerDigitalOutput: no access control authority";
+        LOG_E("%s", last_error_.c_str());
+        return false;
+    }
+    // DRFL enum: GPIO_CTRLBOX_DIGITAL_INDEX_1 .. GPIO_CTRLBOX_DIGITAL_INDEX_N
+    // map sequentially. Convert from the 1-based pendant index.
+    const GPIO_CTRLBOX_DIGITAL_INDEX e_index =
+        static_cast<GPIO_CTRLBOX_DIGITAL_INDEX>(
+            GPIO_CTRLBOX_DIGITAL_INDEX_1 + (index - 1));
+    if (!p_->drfl.set_digital_output(e_index, value ? TRUE : FALSE)) {
+        last_error_ = "DRFL set_digital_output() failed";
+        LOG_E("%s (O%02d=%d)", last_error_.c_str(), index, value ? 1 : 0);
+        return false;
+    }
+#else
+    LOG_I("[SIM] set_digital_output(O%02d, %s)  (controller box)",
+          index, value ? "ON" : "OFF");
+#endif
+    return true;
+}
+
 bool DrflRobotController::sendCartesianVelocity(const std::array<double, 6>& twist) {
     if (!connected_.load() || !engaged_.load()) return false;
 

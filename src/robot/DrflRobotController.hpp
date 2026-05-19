@@ -37,6 +37,7 @@ public:
     bool setTcp(const std::string& name) override;
     bool setToolWeight(const std::string& name) override;
     bool setToolDigitalOutput(int index, bool value) override;
+    bool setControllerDigitalOutput(int index, bool value) override;
 
     bool sendCartesianVelocity(const std::array<double, 6>& twist) override;
     void stopMotion() override;

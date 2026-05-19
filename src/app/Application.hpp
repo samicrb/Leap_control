@@ -121,6 +121,11 @@ private:
     RobotPose             desired_target_pose_{};
     RobotPose             last_commanded_target_pose_{};
     bool                  last_commanded_target_valid_ = false;
+    // Slew-rate state on the pursuit TARGET (XYZ). Stores the desired
+    // target committed last tick so we can cap the per-tick change at
+    // micro_target_change_ratio * micro_lin_vel * T_emit.
+    RobotPose             previous_desired_target_pose_{};
+    bool                  previous_desired_target_valid_ = false;
 
     // Velocity smoothing layer state. v[0..2] are linear (mm/s), v[3..5]
     // are angular (deg/s). The controller integrates filtered_velocity_

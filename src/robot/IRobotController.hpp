@@ -55,6 +55,17 @@ public:
         return false;
     }
 
+    // Drive a CONTROLLER box Digital Output (1-based index) high or low.
+    // Wraps DRFL set_digital_output() on the GPIO_CTRLBOX_DIGITAL_INDEX
+    // enum. Used when the gripper is wired to the controller cabinet
+    // outputs rather than the tool flange (the SoftHand on this cell:
+    // controller O01 = open, O02 = close).
+    // Default impl returns false so non-DRFL adapters (test stubs) do
+    // not silently pretend success.
+    virtual bool setControllerDigitalOutput(int /*index*/, bool /*value*/) {
+        return false;
+    }
+
     // --- Streaming control ---------------------------------------------
     // Request a Cartesian velocity (mm/s, deg/s) in the base frame.
     // Adapter is responsible for forwarding this to the robot's

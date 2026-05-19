@@ -90,6 +90,7 @@ const Alias kAliases[] = {
     {"micro_pursuit.max_step_rot_deg",    "robot.micro_max_step_rot_deg"},
     {"micro_pursuit.arrival_band_xyz_mm", "robot.micro_arrival_band_xyz_mm"},
     {"micro_pursuit.arrival_band_rot_deg","robot.micro_arrival_band_rot_deg"},
+    {"micro_pursuit.target_change_ratio", "robot.micro_target_change_ratio"},
     {"micro_pursuit.tracking_recovery_time_s","robot.micro_tracking_recovery_time_s"},
 
     // [robot_command]
@@ -253,6 +254,7 @@ bool loadConfig(const std::string& path, Config& c) {
     c.gripper_pulse_high_ms       = iGet("gripper.pulse_high_ms",       c.gripper_pulse_high_ms);
     c.gripper_test_pulse_on_start = bGet("gripper.test_pulse_on_start", c.gripper_test_pulse_on_start);
     c.gripper_test_pulse_index    = iGet("gripper.test_pulse_index",    c.gripper_test_pulse_index);
+    c.gripper_io_scope            = sGet("gripper.io_scope",            c.gripper_io_scope);
 
     // --- Vendor / optional gripper selection ---
     c.gripper_enabled              = bGet("gripper.enabled",              c.gripper_enabled);
@@ -310,6 +312,7 @@ bool loadConfig(const std::string& path, Config& c) {
     c.micro_max_step_rot_deg     = dGet("robot.micro_max_step_rot_deg",     c.micro_max_step_rot_deg);
     c.micro_arrival_band_xyz_mm  = dGet("robot.micro_arrival_band_xyz_mm",  c.micro_arrival_band_xyz_mm);
     c.micro_arrival_band_rot_deg = dGet("robot.micro_arrival_band_rot_deg", c.micro_arrival_band_rot_deg);
+    c.micro_target_change_ratio  = dGet("robot.micro_target_change_ratio",  c.micro_target_change_ratio);
 
     c.micro_velocity_filter_enabled = bGet("robot.micro_velocity_filter_enabled", c.micro_velocity_filter_enabled);
     c.micro_velocity_filter_alpha   = dGet("robot.micro_velocity_filter_alpha",   c.micro_velocity_filter_alpha);

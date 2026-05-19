@@ -62,6 +62,26 @@ double limitDelta(double v_new, double v_prev, double cap) {
     return v_new;
 }
 
+// Physical estimate of the time to execute a single Cartesian segment
+// of length `distance` under (velocity, acceleration) caps.
+//   - Short segments (distance < v^2/a) follow a triangular accel-decel
+//     profile: t = 2 * sqrt(distance / a).
+//   - Long  segments (distance >= v^2/a) follow a trapezoidal accel-
+//     cruise-decel profile: t = distance/v + v/a.
+// Replaces the older step/velocity approximation in the backlog guard
+// which underestimated the segment time on short micro-moves.
+double estimateSegmentTime(double distance, double velocity, double acceleration) {
+    if (distance <= 1e-6) return 0.0;
+    if (velocity <= 1e-6 || acceleration <= 1e-6) return 0.0;
+    const double dcrit = (velocity * velocity) / acceleration;
+    if (distance < dcrit) {
+        // Triangular profile (no cruise phase).
+        return 2.0 * std::sqrt(distance / acceleration);
+    }
+    // Trapezoidal profile.
+    return (distance / velocity) + (velocity / acceleration);
+}
+
 } // namespace
 
 Application::Application(Config& cfg,
@@ -451,6 +471,11 @@ void Application::tick(double now_s) {
                 interpreter_.captureReference();
                 active_entry_robot_pose_    = last_commanded_target_pose_;
                 desired_target_pose_        = last_commanded_target_pose_;
+                // Reset the target-slew baseline so the first tick post-
+                // recovery is not artificially capped from the stale
+                // pre-loss desired target.
+                previous_desired_target_pose_  = last_commanded_target_pose_;
+                previous_desired_target_valid_ = false;
                 event_logger_.event("tracking recovered: re-anchoring hand reference",
                                     cfg_.runtime_tuning_print_changes_to_console);
                 reanchor_performed = true;
@@ -643,6 +668,11 @@ void Application::tick(double now_s) {
                 active_entry_robot_pose_valid_ = true;
                 last_commanded_target_valid_   = true;
                 last_command_sent_s_           = now_s - cfg_.micro_min_period_s;
+                // Reset the target-slew baseline so the first tick can
+                // jump from `seed` to the raw target without being
+                // capped by the slew-rate limiter.
+                previous_desired_target_pose_  = seed;
+                previous_desired_target_valid_ = false;
                 // Reset velocity smoothing state - the robot is at rest
                 // at active entry.
                 filtered_velocity_.fill(0.0);
@@ -704,18 +734,50 @@ void Application::tick(double now_s) {
                                      ? 1.0 / cfg_.orientation_scale : 0.0;
                 const double r       = cfg_.micro_hand_to_robot_ratio;
 
-                desired_target_pose_.x  = active_entry_robot_pose_.x
-                    + r * cmd.linear_velocity[0]  * inv_pos;
-                desired_target_pose_.y  = active_entry_robot_pose_.y
-                    + r * cmd.linear_velocity[1]  * inv_pos;
-                desired_target_pose_.z  = active_entry_robot_pose_.z
-                    + r * cmd.linear_velocity[2]  * inv_pos;
-                desired_target_pose_.rx = active_entry_robot_pose_.rx
-                    + r * cmd.angular_velocity[0] * inv_rot;
-                desired_target_pose_.ry = active_entry_robot_pose_.ry
-                    + r * cmd.angular_velocity[1] * inv_rot;
-                desired_target_pose_.rz = active_entry_robot_pose_.rz
-                    + r * cmd.angular_velocity[2] * inv_rot;
+                // 1) Raw absolute target from current hand displacement.
+                RobotPose desired_raw = active_entry_robot_pose_;
+                desired_raw.x  += r * cmd.linear_velocity[0]  * inv_pos;
+                desired_raw.y  += r * cmd.linear_velocity[1]  * inv_pos;
+                desired_raw.z  += r * cmd.linear_velocity[2]  * inv_pos;
+                desired_raw.rx += r * cmd.angular_velocity[0] * inv_rot;
+                desired_raw.ry += r * cmd.angular_velocity[1] * inv_rot;
+                desired_raw.rz += r * cmd.angular_velocity[2] * inv_rot;
+
+                // 2) Slew-rate limit on desired_target_pose_ XYZ. This
+                // does NOT change the robot's per-segment cap (that is
+                // still micro_max_step_xyz_mm); it only bounds how fast
+                // the target itself is allowed to move from one tick to
+                // the next, so a fast hand cannot create a huge tracking
+                // error that the pursuit then catches up to in bursts.
+                if (!previous_desired_target_valid_) {
+                    // First tick after seed / re-anchor: jump to the
+                    // raw target (no slew) so we don't artificially
+                    // lock the demo to active_entry.
+                    previous_desired_target_pose_   = active_entry_robot_pose_;
+                    previous_desired_target_valid_  = true;
+                }
+                const double T_emit = std::max(cfg_.micro_min_period_s,
+                    1.0 / std::max(cfg_.micro_command_rate_hz, 0.1));
+                const double max_dxyz =
+                    cfg_.micro_target_change_ratio * cfg_.micro_lin_vel * T_emit;
+
+                double dx = desired_raw.x - previous_desired_target_pose_.x;
+                double dy = desired_raw.y - previous_desired_target_pose_.y;
+                double dz = desired_raw.z - previous_desired_target_pose_.z;
+                limitVectorNorm3(dx, dy, dz, max_dxyz);
+
+                desired_target_pose_.x  = previous_desired_target_pose_.x + dx;
+                desired_target_pose_.y  = previous_desired_target_pose_.y + dy;
+                desired_target_pose_.z  = previous_desired_target_pose_.z + dz;
+                // Orientation pass-through (no slew on the rotation
+                // target for now - existing arrival_band / max_step caps
+                // keep the rotation step bounded).
+                desired_target_pose_.rx = desired_raw.rx;
+                desired_target_pose_.ry = desired_raw.ry;
+                desired_target_pose_.rz = desired_raw.rz;
+
+                previous_desired_target_pose_  = desired_target_pose_;
+                previous_desired_target_valid_ = true;
             } else if (ramp_to_zero_) {
                 // Ramp-to-zero: hold the desired target at the current
                 // commanded position. Zero error -> zero desired
@@ -734,10 +796,15 @@ void Application::tick(double now_s) {
             sample_scheduler_elapsed_ms = elapsed * 1000.0;
 
             // Backlog-guard estimate of the previous segment execution.
-            const double t_est_lin = cfg_.micro_lin_vel > 1e-3
-                ? last_emitted_step_xyz_mm_  / cfg_.micro_lin_vel : 0.0;
-            const double t_est_ang = cfg_.micro_ang_vel > 1e-3
-                ? last_emitted_step_rot_deg_ / cfg_.micro_ang_vel : 0.0;
+            // Uses a PHYSICAL accel-aware model (triangular for short
+            // segments, trapezoidal for long ones) so short micro-moves
+            // are not under-estimated by the legacy step/velocity ratio.
+            const double t_est_lin = estimateSegmentTime(
+                last_emitted_step_xyz_mm_,
+                cfg_.micro_lin_vel, cfg_.micro_lin_acc);
+            const double t_est_ang = estimateSegmentTime(
+                last_emitted_step_rot_deg_,
+                cfg_.micro_ang_vel, cfg_.micro_ang_acc);
             const double t_est_s = std::max(t_est_lin, t_est_ang);
             sample_prev_motion_est_ms = t_est_s * 1000.0;
             const bool backlog_guard_engaged =
